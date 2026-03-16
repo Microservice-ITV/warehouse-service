@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Warehouse {
+  id         String      @id @default(uuid())
+  shopId     String
+  name       String
+  location   String?
+  status     WarehouseStatus @default(ACTIVE)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  inventories Inventory[]
+  movements   StockMovement[]
+
+  @@index([shopId])
+  @@index([status])
+  @@map("warehouses")
+}
+
+model Inventory {
+  id            String   @id @default(uuid())
+  warehouseId   String
+  productId     String
+  availableStock Int     @default(0)
+  reservedStock  Int     @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  reservationItems StockReservationItem[]
+  movements StockMovement[]
+
+  @@unique([warehouseId, productId])
+  @@index([productId])
+  @@map("inventories")
+}
+
+model StockReservation {
+  id         String            @id @default(uuid())
+  orderId    String
+  checkoutId String            @unique
+  status     ReservationStatus @default(RESERVED)
+  expiresAt  DateTime          @default(now())
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  items      StockReservationItem[]
+
+  @@index([orderId])
+  @@index([status])
+  @@index([status, expiresAt])
+  @@map("stock_reservations")
+}
+
+model StockReservationItem {
+  id            String   @id @default(uuid())
+  reservationId String
+  productId     String
+  warehouseId   String
+  quantity      Int
+  createdAt     DateTime @default(now())
+
+  reservation StockReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  inventory   Inventory?       @relation(fields: [warehouseId, productId], references: [warehouseId, productId], onDelete: Restrict)
+
+  @@index([reservationId])
+  @@index([productId])
+  @@index([warehouseId])
+  @@map("stock_reservation_items")
+}
+
+model StockMovement {
+  id          String            @id @default(uuid())
+  productId   String
+  warehouseId String
+  type        StockMovementType
+  quantity    Int
+  referenceId String
+  createdAt   DateTime          @default(now())
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  inventory Inventory? @relation(fields: [warehouseId, productId], references: [warehouseId, productId], onDelete: Restrict)
+
+  @@index([productId, warehouseId])
+  @@index([referenceId])
+  @@map("stock_movements")
+}
+
+model OutboxEvent {
+  id          String      @id @default(uuid())
+  eventId     String      @unique
+  event       String
+  routingKey  String
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  attempts    Int         @default(0)
+  publishedAt DateTime?
+  error       String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+model InboxEvent {
+  id            String      @id @default(uuid())
+  eventId       String      @unique
+  event         String
+  routingKey    String?
+  payload       Json
+  producer      String?
+  correlationId String?
+  checkoutId    String?
+  status        InboxStatus @default(RECEIVED)
+  receivedAt    DateTime    @default(now())
+  processedAt   DateTime?
+  attempts      Int         @default(0)
+  error         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([status, receivedAt])
+  @@index([event])
+  @@index([checkoutId])
+  @@map("inbox_events")
+}
+
+model ProcessedEvent {
+  id            String   @id @default(uuid())
+  eventId       String   @unique
+  event         String
+  producer      String?
+  correlationId String?
+  checkoutId    String?
+  processedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([event])
+  @@index([checkoutId])
+  @@map("processed_events")
+}
+
+model ProductSnapshot {
+  id          String   @id @default(uuid())
+  productId   String   @unique
+  shopId      String
+  categoryId  String?
+  slug        String?
+  title       String
+  description String?
+  sku         String?
+  price       Decimal  @db.Decimal(10, 2)
+  currency    String   @default("USD")
+  images      String[] @default([])
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId])
+  @@index([isActive])
+  @@map("product_snapshots")
+}
+
+enum WarehouseStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ReservationStatus {
+  RESERVED
+  CONFIRMED
+  RELEASED
+  EXPIRED
+}
+
+enum StockMovementType {
+  INBOUND
+  OUTBOUND
+  RESERVED
+  RELEASED
+  ADJUSTMENT
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum InboxStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
