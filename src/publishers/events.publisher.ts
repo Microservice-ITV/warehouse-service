@@ -60,6 +60,7 @@ export class EventsPublisher {
   async publishStockConfirmed(input: {
     checkoutId: string;
     reservationId: string;
+    orderId?: string;
     correlationId: string;
     db?: Db;
   }) {
@@ -69,6 +70,7 @@ export class EventsPublisher {
       data: {
         checkout_id: input.checkoutId,
         reservation_id: input.reservationId,
+        ...(input.orderId ? { order_id: input.orderId } : {}),
       },
     });
     await outboxRepository.enqueue({

@@ -10,6 +10,12 @@ export class MovementRepository {
     type: StockMovementType;
     quantity: number;
     referenceId: string;
+    referenceType?: 'UNSPECIFIED' | 'BOOTSTRAP' | 'CHECKOUT' | 'RESERVATION' | 'MANUAL';
+    checkoutId?: string;
+    orderId?: string;
+    reservationId?: string;
+    correlationId?: string;
+    metadata?: Prisma.InputJsonValue;
     db?: Db;
   }) {
     const db = params.db ?? prisma;
@@ -20,6 +26,12 @@ export class MovementRepository {
         type: params.type,
         quantity: params.quantity,
         referenceId: params.referenceId,
+        ...(params.referenceType ? { referenceType: params.referenceType } : {}),
+        ...(params.checkoutId ? { checkoutId: params.checkoutId } : {}),
+        ...(params.orderId ? { orderId: params.orderId } : {}),
+        ...(params.reservationId ? { reservationId: params.reservationId } : {}),
+        ...(params.correlationId ? { correlationId: params.correlationId } : {}),
+        ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
       },
     });
   }

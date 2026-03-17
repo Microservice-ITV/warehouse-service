@@ -11,6 +11,8 @@ model Warehouse {
   shopId     String
   name       String
   location   String?
+  isDefault  Boolean     @default(false)
+  defaultMarker String?  @unique
   status     WarehouseStatus @default(ACTIVE)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
@@ -18,6 +20,7 @@ model Warehouse {
   movements   StockMovement[]
 
   @@index([shopId])
+  @@index([shopId, isDefault])
   @@index([status])
   @@map("warehouses")
 }
@@ -80,6 +83,12 @@ model StockMovement {
   type        StockMovementType
   quantity    Int
   referenceId String
+  referenceType StockMovementReferenceType @default(UNSPECIFIED)
+  checkoutId  String?
+  orderId     String?
+  reservationId String?
+  correlationId String?
+  metadata    Json?
   createdAt   DateTime          @default(now())
 
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
@@ -87,6 +96,10 @@ model StockMovement {
 
   @@index([productId, warehouseId])
   @@index([referenceId])
+  @@index([referenceType])
+  @@index([checkoutId])
+  @@index([orderId])
+  @@index([reservationId])
   @@map("stock_movements")
 }
 
@@ -186,6 +199,14 @@ enum StockMovementType {
   RESERVED
   RELEASED
   ADJUSTMENT
+}
+
+enum StockMovementReferenceType {
+  UNSPECIFIED
+  BOOTSTRAP
+  CHECKOUT
+  RESERVATION
+  MANUAL
 }
 
 enum OutboxStatus {

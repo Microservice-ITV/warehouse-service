@@ -3,6 +3,7 @@ import { InventoryRepository } from '@/repositories/inventory.repository';
 import { MovementRepository } from '@/repositories/movement.repository';
 import { ReservationRepository } from '@/repositories/reservation.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
+import { WarehouseService } from '@/services/warehouse.service';
 import { ConflictError, NotFoundError, ValidationError } from '@/utils/errors';
 import { EventsPublisher } from '@/publishers/events.publisher';
 
@@ -16,6 +17,7 @@ export class ReservationService {
   private readonly reservationRepository = new ReservationRepository();
   private readonly inventoryRepository = new InventoryRepository();
   private readonly warehouseRepository = new WarehouseRepository();
+  private readonly warehouseService = new WarehouseService();
   private readonly movementRepository = new MovementRepository();
   private readonly eventsPublisher = new EventsPublisher();
 
@@ -26,10 +28,7 @@ export class ReservationService {
         : 0;
     const warehouses = await this.warehouseRepository.findActiveByShop(input.shopId);
     if (warehouses.length === 0) {
-      await this.warehouseRepository.create({
-        shopId: input.shopId,
-        name: `Default Warehouse (${input.shopId.slice(0, 8)})`,
-      });
+      await this.warehouseService.ensureDefaultWarehouse(input.shopId);
     }
     const finalWarehouses = await this.warehouseRepository.findActiveByShop(input.shopId);
     await prisma.$transaction(async (tx) => {
@@ -62,6 +61,10 @@ export class ReservationService {
             type: 'INBOUND',
             quantity: initialStock,
             referenceId: `bootstrap:product.created:${input.productId}`,
+            referenceType: 'BOOTSTRAP',
+            metadata: {
+              source_event: 'product.created',
+            },
             db: tx,
           });
 
@@ -136,6 +139,10 @@ export class ReservationService {
           type: 'RESERVED',
           quantity: item.quantity,
           referenceId: input.checkoutId,
+          referenceType: 'CHECKOUT',
+          checkoutId: input.checkoutId,
+          orderId: input.orderId,
+          correlationId: input.correlationId,
           db: tx,
         });
 
@@ -189,6 +196,7 @@ export class ReservationService {
   async confirmReservation(input: {
     checkoutId: string;
     reservationId?: string;
+    orderId?: string;
     correlationId: string;
   }) {
     return prisma.$transaction(async (tx) => {
@@ -228,6 +236,11 @@ export class ReservationService {
           type: 'OUTBOUND',
           quantity: item.quantity,
           referenceId: reservation.id,
+          referenceType: 'RESERVATION',
+          checkoutId: reservation.checkoutId,
+          orderId: reservation.orderId,
+          reservationId: reservation.id,
+          correlationId: input.correlationId,
           db: tx,
         });
       }
@@ -237,6 +250,7 @@ export class ReservationService {
       await this.eventsPublisher.publishStockConfirmed({
         checkoutId: reservation.checkoutId,
         reservationId: reservation.id,
+        orderId: input.orderId,
         correlationId: input.correlationId,
         db: tx,
       });
@@ -293,6 +307,11 @@ export class ReservationService {
           type: 'RELEASED',
           quantity: item.quantity,
           referenceId: reservation.id,
+          referenceType: 'RESERVATION',
+          checkoutId: reservation.checkoutId,
+          orderId: reservation.orderId,
+          reservationId: reservation.id,
+          correlationId: input.correlationId,
           db: tx,
         });
       }
@@ -347,6 +366,14 @@ export class ReservationService {
             type: 'RELEASED',
             quantity: item.quantity,
             referenceId: reservation.id,
+            referenceType: 'RESERVATION',
+            checkoutId: reservation.checkoutId,
+            orderId: reservation.orderId,
+            reservationId: reservation.id,
+            correlationId: reservation.checkoutId,
+            metadata: {
+              expired: true,
+            },
             db: tx,
           });
         }

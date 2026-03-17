@@ -14,6 +14,14 @@ export interface ProductEventData {
   is_active?: boolean;
 }
 
+export interface ShopEventData {
+  shop_id: string;
+  name?: string;
+  slug?: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+
 export interface ProductCreatedEvent {
   event_id: string;
   event: 'product.created';
@@ -37,6 +45,32 @@ export interface ProductDeletedEvent {
   producer?: string;
   data: {
     product_id: string;
+  };
+}
+
+export interface ShopCreatedEvent {
+  event_id: string;
+  event: 'shop.created';
+  correlation_id?: string;
+  producer?: string;
+  data: ShopEventData;
+}
+
+export interface ShopUpdatedEvent {
+  event_id: string;
+  event: 'shop.updated';
+  correlation_id?: string;
+  producer?: string;
+  data: ShopEventData;
+}
+
+export interface ShopDeletedEvent {
+  event_id: string;
+  event: 'shop.deleted';
+  correlation_id?: string;
+  producer?: string;
+  data: {
+    shop_id: string;
   };
 }
 

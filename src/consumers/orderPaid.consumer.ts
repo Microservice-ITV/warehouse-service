@@ -56,6 +56,7 @@ export const startOrderPaidConsumer = async () => {
         await reservationService.confirmReservation({
           checkoutId: payload.data.checkout_id,
           reservationId: payload.data.reservation_id,
+          orderId: payload.data.order_id,
           correlationId: payload.correlation_id ?? payload.data.checkout_id,
         });
 

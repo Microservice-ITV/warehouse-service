@@ -32,6 +32,9 @@ const setupChannel = async (ch: Channel) => {
   await bindConsumerQueue(ch, rabbitConfig.consume.productCreated);
   await bindConsumerQueue(ch, rabbitConfig.consume.productUpdated);
   await bindConsumerQueue(ch, rabbitConfig.consume.productDeleted);
+  await bindConsumerQueue(ch, rabbitConfig.consume.shopCreated);
+  await bindConsumerQueue(ch, rabbitConfig.consume.shopUpdated);
+  await bindConsumerQueue(ch, rabbitConfig.consume.shopDeleted);
   await bindConsumerQueue(ch, rabbitConfig.consume.orderCreated);
   await bindConsumerQueue(ch, rabbitConfig.consume.orderPaid);
   await bindConsumerQueue(ch, rabbitConfig.consume.orderCancelled);

@@ -26,6 +26,24 @@ export const rabbitConfig = {
       dlq: env.RABBITMQ_PRODUCT_DELETED_DLQ,
       dlqRoutingKey: `${env.RABBITMQ_PRODUCT_DELETED_KEY}.dlq`,
     },
+    shopCreated: {
+      routingKey: env.RABBITMQ_SHOP_CREATED_KEY,
+      queue: env.RABBITMQ_SHOP_CREATED_QUEUE,
+      dlq: env.RABBITMQ_SHOP_CREATED_DLQ,
+      dlqRoutingKey: `${env.RABBITMQ_SHOP_CREATED_KEY}.dlq`,
+    },
+    shopUpdated: {
+      routingKey: env.RABBITMQ_SHOP_UPDATED_KEY,
+      queue: env.RABBITMQ_SHOP_UPDATED_QUEUE,
+      dlq: env.RABBITMQ_SHOP_UPDATED_DLQ,
+      dlqRoutingKey: `${env.RABBITMQ_SHOP_UPDATED_KEY}.dlq`,
+    },
+    shopDeleted: {
+      routingKey: env.RABBITMQ_SHOP_DELETED_KEY,
+      queue: env.RABBITMQ_SHOP_DELETED_QUEUE,
+      dlq: env.RABBITMQ_SHOP_DELETED_DLQ,
+      dlqRoutingKey: `${env.RABBITMQ_SHOP_DELETED_KEY}.dlq`,
+    },
     orderCreated: {
       routingKey: env.RABBITMQ_ORDER_CREATED_KEY,
       queue: env.RABBITMQ_ORDER_CREATED_QUEUE,

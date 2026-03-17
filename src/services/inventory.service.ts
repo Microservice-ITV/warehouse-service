@@ -56,6 +56,8 @@ export class InventoryService {
         type: 'INBOUND',
         quantity: input.quantity,
         referenceId: input.referenceId,
+        referenceType: 'MANUAL',
+        correlationId: input.referenceId,
         db: tx,
       });
 
@@ -114,6 +116,8 @@ export class InventoryService {
         type: 'ADJUSTMENT',
         quantity: input.quantity,
         referenceId: input.referenceId,
+        referenceType: 'MANUAL',
+        correlationId: input.referenceId,
         db: tx,
       });
 

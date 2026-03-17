@@ -4,6 +4,9 @@ import { startOrderPaidConsumer } from '@/consumers/orderPaid.consumer';
 import { startProductCreatedConsumer } from '@/consumers/productCreated.consumer';
 import { startProductDeletedConsumer } from '@/consumers/productDeleted.consumer';
 import { startProductUpdatedConsumer } from '@/consumers/productUpdated.consumer';
+import { startShopCreatedConsumer } from '@/consumers/shopCreated.consumer';
+import { startShopDeletedConsumer } from '@/consumers/shopDeleted.consumer';
+import { startShopUpdatedConsumer } from '@/consumers/shopUpdated.consumer';
 import logger from '@/utils/logger';
 
 export const startRabbitMQ = async () => {
@@ -11,6 +14,9 @@ export const startRabbitMQ = async () => {
     await startProductCreatedConsumer();
     await startProductUpdatedConsumer();
     await startProductDeletedConsumer();
+    await startShopCreatedConsumer();
+    await startShopUpdatedConsumer();
+    await startShopDeletedConsumer();
     await startOrderCreatedConsumer();
     await startOrderPaidConsumer();
     await startOrderCancelledConsumer();
