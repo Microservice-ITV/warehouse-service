@@ -51,6 +51,9 @@ const schema = z.object({
   RABBITMQ_STOCK_REJECTED_KEY: z.string().default('stock.rejected'),
   RABBITMQ_STOCK_CONFIRMED_KEY: z.string().default('stock.confirmed'),
   RABBITMQ_INVENTORY_UPDATED_KEY: z.string().default('inventory.updated'),
+  RABBITMQ_INVENTORY_LOW_STOCK_KEY: z.string().default('inventory.low_stock'),
+
+  LOW_STOCK_THRESHOLD: z.coerce.number().int().min(0).default(5),
 
   OUTBOX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(3000),
   OUTBOX_PUBLISH_BATCH_SIZE: z.coerce.number().int().positive().default(100),

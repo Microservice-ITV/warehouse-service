@@ -1,10 +1,14 @@
+import type { Prisma } from '@prisma/client';
 import prisma from '@/config/database';
+import env from '@/config/env';
 import { InventoryRepository } from '@/repositories/inventory.repository';
 import { MovementRepository } from '@/repositories/movement.repository';
 import { ProductSnapshotRepository } from '@/repositories/productSnapshot.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { EventsPublisher } from '@/publishers/events.publisher';
+
+type Db = Prisma.TransactionClient | typeof prisma;
 
 export const toAvailabilityStatus = (availableStock: number) => {
   if (availableStock <= 0) return 'OUT_OF_STOCK';
@@ -18,6 +22,27 @@ export class InventoryService {
   private readonly productSnapshotRepository = new ProductSnapshotRepository();
   private readonly warehouseRepository = new WarehouseRepository();
   private readonly eventsPublisher = new EventsPublisher();
+  private readonly threshold = env.LOW_STOCK_THRESHOLD;
+
+  async maybePublishLowStock(params: {
+    warehouseId: string;
+    productId: string;
+    shopId: string;
+    availableStock: number;
+    correlationId: string;
+    db?: Db;
+  }) {
+    if (params.availableStock >= this.threshold) return;
+    await this.eventsPublisher.publishInventoryLowStock({
+      productId: params.productId,
+      shopId: params.shopId,
+      warehouseId: params.warehouseId,
+      availableStock: params.availableStock,
+      threshold: this.threshold,
+      correlationId: params.correlationId,
+      db: params.db,
+    });
+  }
 
   async listWarehouseInventory(warehouseId: string) {
     const warehouse = await this.warehouseRepository.findById(warehouseId);
@@ -71,6 +96,14 @@ export class InventoryService {
         shopId: warehouse.shopId,
         totalStock: totals.total,
         availableStock: totals.available,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+      await this.maybePublishLowStock({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        availableStock: inventory.availableStock,
         correlationId: input.referenceId,
         db: tx,
       });
@@ -134,8 +167,272 @@ export class InventoryService {
         correlationId: input.referenceId,
         db: tx,
       });
+      await this.maybePublishLowStock({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        availableStock: updated.availableStock,
+        correlationId: input.referenceId,
+        db: tx,
+      });
 
       return updated;
+    });
+  }
+
+  async transferStock(input: {
+    fromWarehouseId: string;
+    toWarehouseId: string;
+    productId: string;
+    quantity: number;
+    referenceId: string;
+  }) {
+    if (input.quantity <= 0) throw new ValidationError('Quantity must be > 0');
+    if (input.fromWarehouseId === input.toWarehouseId) {
+      throw new ValidationError('Source and destination warehouses must be different');
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const [fromWarehouse, toWarehouse] = await Promise.all([
+        this.warehouseRepository.findById(input.fromWarehouseId, tx),
+        this.warehouseRepository.findById(input.toWarehouseId, tx),
+      ]);
+      if (!fromWarehouse) throw new NotFoundError('Source warehouse not found');
+      if (!toWarehouse) throw new NotFoundError('Destination warehouse not found');
+
+      const fromInventory = await this.inventoryRepository.findByWarehouseAndProduct(
+        input.fromWarehouseId,
+        input.productId,
+        tx
+      );
+      if (!fromInventory) throw new NotFoundError('Inventory not found in source warehouse');
+      if (fromInventory.availableStock < input.quantity) {
+        throw new ValidationError('Insufficient available stock in source warehouse');
+      }
+
+      await this.inventoryRepository.upsertByWarehouseAndProduct(
+        input.toWarehouseId,
+        input.productId,
+        tx
+      );
+
+      const fromUpdated = await this.inventoryRepository.incrementStocks({
+        warehouseId: input.fromWarehouseId,
+        productId: input.productId,
+        availableDelta: -input.quantity,
+        db: tx,
+      });
+
+      const toUpdated = await this.inventoryRepository.incrementStocks({
+        warehouseId: input.toWarehouseId,
+        productId: input.productId,
+        availableDelta: input.quantity,
+        db: tx,
+      });
+
+      await this.movementRepository.create({
+        productId: input.productId,
+        warehouseId: input.fromWarehouseId,
+        type: 'OUTBOUND',
+        quantity: input.quantity,
+        referenceId: input.referenceId,
+        referenceType: 'TRANSFER',
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      await this.movementRepository.create({
+        productId: input.productId,
+        warehouseId: input.toWarehouseId,
+        type: 'INBOUND',
+        quantity: input.quantity,
+        referenceId: input.referenceId,
+        referenceType: 'TRANSFER',
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      const totals = await this.inventoryRepository.computeTotalStockByShopProduct(
+        fromWarehouse.shopId,
+        input.productId,
+        tx
+      );
+      await this.eventsPublisher.publishInventoryUpdated({
+        productId: input.productId,
+        shopId: fromWarehouse.shopId,
+        totalStock: totals.total,
+        availableStock: totals.available,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      await this.maybePublishLowStock({
+        warehouseId: input.fromWarehouseId,
+        productId: input.productId,
+        shopId: fromWarehouse.shopId,
+        availableStock: fromUpdated.availableStock,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      if (toWarehouse.shopId !== fromWarehouse.shopId) {
+        const toTotals = await this.inventoryRepository.computeTotalStockByShopProduct(
+          toWarehouse.shopId,
+          input.productId,
+          tx
+        );
+        await this.eventsPublisher.publishInventoryUpdated({
+          productId: input.productId,
+          shopId: toWarehouse.shopId,
+          totalStock: toTotals.total,
+          availableStock: toTotals.available,
+          correlationId: input.referenceId,
+          db: tx,
+        });
+      }
+
+      await this.maybePublishLowStock({
+        warehouseId: input.toWarehouseId,
+        productId: input.productId,
+        shopId: toWarehouse.shopId,
+        availableStock: toUpdated.availableStock,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      return { fromWarehouse: fromUpdated, toWarehouse: toUpdated };
+    });
+  }
+
+  async countStock(input: {
+    warehouseId: string;
+    productId: string;
+    countedQty: number;
+    referenceId: string;
+  }) {
+    if (input.countedQty < 0) throw new ValidationError('Counted quantity cannot be negative');
+
+    return prisma.$transaction(async (tx) => {
+      const warehouse = await this.warehouseRepository.findById(input.warehouseId, tx);
+      if (!warehouse) throw new NotFoundError('Warehouse not found');
+
+      const existing = await this.inventoryRepository.findByWarehouseAndProduct(
+        input.warehouseId,
+        input.productId,
+        tx
+      );
+      if (!existing) throw new NotFoundError('Inventory not found');
+
+      const delta = input.countedQty - (existing.availableStock + existing.reservedStock);
+      if (delta === 0) return existing;
+
+      const updated = await this.inventoryRepository.incrementStocks({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        availableDelta: delta,
+        db: tx,
+      });
+
+      await this.movementRepository.create({
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        type: 'ADJUSTMENT',
+        quantity: delta,
+        referenceId: input.referenceId,
+        referenceType: 'STOCK_TAKE',
+        correlationId: input.referenceId,
+        metadata: { countedQty: input.countedQty, previousStock: existing.availableStock + existing.reservedStock },
+        db: tx,
+      });
+
+      const totals = await this.inventoryRepository.computeTotalStockByShopProduct(
+        warehouse.shopId,
+        input.productId,
+        tx
+      );
+      await this.eventsPublisher.publishInventoryUpdated({
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        totalStock: totals.total,
+        availableStock: totals.available,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+      await this.maybePublishLowStock({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        availableStock: updated.availableStock,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      return updated;
+    });
+  }
+
+  async receiveStock(input: {
+    warehouseId: string;
+    productId: string;
+    quantity: number;
+    referenceType: 'PO' | string;
+    referenceId: string;
+  }) {
+    if (input.quantity <= 0) throw new ValidationError('Quantity must be > 0');
+
+    return prisma.$transaction(async (tx) => {
+      const warehouse = await this.warehouseRepository.findById(input.warehouseId, tx);
+      if (!warehouse) throw new NotFoundError('Warehouse not found');
+
+      await this.inventoryRepository.upsertByWarehouseAndProduct(
+        input.warehouseId,
+        input.productId,
+        tx
+      );
+
+      const inventory = await this.inventoryRepository.incrementStocks({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        availableDelta: input.quantity,
+        db: tx,
+      });
+
+      const refType = input.referenceType === 'PO' ? 'PO' : 'MANUAL';
+      await this.movementRepository.create({
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        type: 'INBOUND',
+        quantity: input.quantity,
+        referenceId: input.referenceId,
+        referenceType: refType,
+        correlationId: input.referenceId,
+        metadata: refType === 'PO' ? { referenceType: input.referenceType } : undefined,
+        db: tx,
+      });
+
+      const totals = await this.inventoryRepository.computeTotalStockByShopProduct(
+        warehouse.shopId,
+        input.productId,
+        tx
+      );
+      await this.eventsPublisher.publishInventoryUpdated({
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        totalStock: totals.total,
+        availableStock: totals.available,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+      await this.maybePublishLowStock({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        shopId: warehouse.shopId,
+        availableStock: inventory.availableStock,
+        correlationId: input.referenceId,
+        db: tx,
+      });
+
+      return inventory;
     });
   }
 

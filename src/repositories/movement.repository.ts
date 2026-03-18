@@ -10,7 +10,15 @@ export class MovementRepository {
     type: StockMovementType;
     quantity: number;
     referenceId: string;
-    referenceType?: 'UNSPECIFIED' | 'BOOTSTRAP' | 'CHECKOUT' | 'RESERVATION' | 'MANUAL';
+    referenceType?:
+      | 'UNSPECIFIED'
+      | 'BOOTSTRAP'
+      | 'CHECKOUT'
+      | 'RESERVATION'
+      | 'MANUAL'
+      | 'PO'
+      | 'STOCK_TAKE'
+      | 'TRANSFER';
     checkoutId?: string;
     orderId?: string;
     reservationId?: string;

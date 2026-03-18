@@ -207,6 +207,9 @@ enum StockMovementReferenceType {
   CHECKOUT
   RESERVATION
   MANUAL
+  PO
+  STOCK_TAKE
+  TRANSFER
 }
 
 enum OutboxStatus {

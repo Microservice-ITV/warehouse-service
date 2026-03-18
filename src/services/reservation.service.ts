@@ -3,6 +3,7 @@ import { InventoryRepository } from '@/repositories/inventory.repository';
 import { MovementRepository } from '@/repositories/movement.repository';
 import { ReservationRepository } from '@/repositories/reservation.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
+import { InventoryService } from '@/services/inventory.service';
 import { WarehouseService } from '@/services/warehouse.service';
 import { ConflictError, NotFoundError, ValidationError } from '@/utils/errors';
 import { EventsPublisher } from '@/publishers/events.publisher';
@@ -18,6 +19,7 @@ export class ReservationService {
   private readonly inventoryRepository = new InventoryRepository();
   private readonly warehouseRepository = new WarehouseRepository();
   private readonly warehouseService = new WarehouseService();
+  private readonly inventoryService = new InventoryService();
   private readonly movementRepository = new MovementRepository();
   private readonly eventsPublisher = new EventsPublisher();
 
@@ -187,6 +189,21 @@ export class ReservationService {
           correlationId: input.correlationId,
           db: tx,
         });
+        const inv = await this.inventoryRepository.findByWarehouseAndProduct(
+          item.warehouseId,
+          item.productId,
+          tx
+        );
+        if (inv) {
+          await this.inventoryService.maybePublishLowStock({
+            warehouseId: item.warehouseId,
+            productId: item.productId,
+            shopId: item.shopId,
+            availableStock: inv.availableStock,
+            correlationId: input.correlationId,
+            db: tx,
+          });
+        }
       }
 
       return reservation;
@@ -334,6 +351,21 @@ export class ReservationService {
           correlationId: input.correlationId,
           db: tx,
         });
+        const inv = await this.inventoryRepository.findByWarehouseAndProduct(
+          item.warehouseId,
+          item.productId,
+          tx
+        );
+        if (inv) {
+          await this.inventoryService.maybePublishLowStock({
+            warehouseId: item.warehouseId,
+            productId: item.productId,
+            shopId: warehouse.shopId,
+            availableStock: inv.availableStock,
+            correlationId: input.correlationId,
+            db: tx,
+          });
+        }
       }
 
       return reservation;
@@ -396,6 +428,21 @@ export class ReservationService {
             correlationId: reservation.checkoutId,
             db: tx,
           });
+          const inv = await this.inventoryRepository.findByWarehouseAndProduct(
+            item.warehouseId,
+            item.productId,
+            tx
+          );
+          if (inv) {
+            await this.inventoryService.maybePublishLowStock({
+              warehouseId: item.warehouseId,
+              productId: item.productId,
+              shopId: warehouse.shopId,
+              availableStock: inv.availableStock,
+              correlationId: reservation.checkoutId,
+              db: tx,
+            });
+          }
         }
 
         return true;

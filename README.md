@@ -43,6 +43,8 @@ prisma/
 ## REST APIs
 
 - `POST /api/v1/warehouses`
+- `GET /api/v1/warehouses?shopId=:shopId`
+- `GET /api/v1/warehouses/:id`
 - `GET /api/v1/warehouses/:id/inventory`
 - `POST /api/v1/inventory/increase`
 - `POST /api/v1/inventory/adjust`

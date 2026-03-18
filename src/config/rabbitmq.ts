@@ -68,5 +68,6 @@ export const rabbitConfig = {
     stockRejected: env.RABBITMQ_STOCK_REJECTED_KEY,
     stockConfirmed: env.RABBITMQ_STOCK_CONFIRMED_KEY,
     inventoryUpdated: env.RABBITMQ_INVENTORY_UPDATED_KEY,
+    inventoryLowStock: env.RABBITMQ_INVENTORY_LOW_STOCK_KEY,
   },
 };

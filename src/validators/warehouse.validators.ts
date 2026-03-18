@@ -14,3 +14,7 @@ export const updateWarehouseSchema = z
     status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
   })
   .refine((data) => Object.keys(data).length > 0, 'At least one field must be provided');
+
+export const listWarehousesQuerySchema = z.object({
+  shopId: z.string().uuid(),
+});

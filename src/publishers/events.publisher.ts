@@ -113,4 +113,34 @@ export class EventsPublisher {
     });
     return envelope;
   }
+
+  async publishInventoryLowStock(input: {
+    productId: string;
+    shopId: string;
+    warehouseId: string;
+    availableStock: number;
+    threshold: number;
+    correlationId: string;
+    db?: Db;
+  }) {
+    const envelope = createEventEnvelope({
+      event: 'inventory.low_stock',
+      correlationId: input.correlationId,
+      data: {
+        product_id: input.productId,
+        shop_id: input.shopId,
+        warehouse_id: input.warehouseId,
+        available_stock: input.availableStock,
+        threshold: input.threshold,
+      },
+    });
+    await outboxRepository.enqueue({
+      eventId: envelope.event_id,
+      event: envelope.event,
+      routingKey: rabbitConfig.publish.inventoryLowStock,
+      payload: envelope,
+      db: input.db ?? prisma,
+    });
+    return envelope;
+  }
 }

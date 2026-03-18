@@ -239,6 +239,105 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "6a. Transfer Stock (JWT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fromWarehouseId\": \"{{warehouse_id}}\",\n  \"toWarehouseId\": \"{{to_warehouse_id}}\",\n  \"productId\": \"{{product_id}}\",\n  \"quantity\": 5,\n  \"referenceId\": \"transfer-001\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/inventory/transfer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "inventory",
+                "transfer"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "6b. Stock Take / Count (JWT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"warehouseId\": \"{{warehouse_id}}\",\n  \"productId\": \"{{product_id}}\",\n  \"countedQty\": 45,\n  \"referenceId\": \"stock-take-001\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/inventory/count",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "inventory",
+                "count"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "6c. Receive Stock (PO stub) (JWT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"warehouseId\": \"{{warehouse_id}}\",\n  \"productId\": \"{{product_id}}\",\n  \"quantity\": 30,\n  \"referenceType\": \"PO\",\n  \"referenceId\": \"PO-2026-001\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/inventory/receive",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "inventory",
+                "receive"
+              ]
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -309,6 +408,11 @@
     },
     {
       "key": "product_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "to_warehouse_id",
       "value": "",
       "type": "string"
     }

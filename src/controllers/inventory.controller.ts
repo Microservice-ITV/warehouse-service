@@ -31,3 +31,18 @@ export const validateProductStock = async (req: Request, res: Response) => {
   const data = await inventoryService.validateProductStock(req.body);
   return res.status(200).json({ success: true, data });
 };
+
+export const transferStock = async (req: Request, res: Response) => {
+  const data = await inventoryService.transferStock(req.body);
+  return res.status(200).json({ success: true, data });
+};
+
+export const countStock = async (req: Request, res: Response) => {
+  const data = await inventoryService.countStock(req.body);
+  return res.status(200).json({ success: true, data });
+};
+
+export const receiveStock = async (req: Request, res: Response) => {
+  const data = await inventoryService.receiveStock(req.body);
+  return res.status(200).json({ success: true, data });
+};

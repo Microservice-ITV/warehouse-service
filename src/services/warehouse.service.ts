@@ -98,4 +98,8 @@ export class WarehouseService {
     }
     return warehouse;
   }
+
+  async listWarehousesByShop(shopId: string) {
+    return this.warehouseRepository.findActiveByShop(shopId);
+  }
 }
