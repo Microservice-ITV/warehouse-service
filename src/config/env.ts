@@ -23,9 +23,6 @@ const schema = z.object({
   RABBITMQ_SHOP_CREATED_KEY: z.string().default('shop.created'),
   RABBITMQ_SHOP_UPDATED_KEY: z.string().default('shop.updated'),
   RABBITMQ_SHOP_DELETED_KEY: z.string().default('shop.deleted'),
-  RABBITMQ_ORDER_CREATED_KEY: z.string().default('order.created'),
-  RABBITMQ_ORDER_PAID_KEY: z.string().default('order.paid'),
-  RABBITMQ_ORDER_CANCELLED_KEY: z.string().default('order.cancelled'),
 
   RABBITMQ_PRODUCT_CREATED_QUEUE: z.string().default('warehouse_service.product_created'),
   RABBITMQ_PRODUCT_UPDATED_QUEUE: z.string().default('warehouse_service.product_updated'),
@@ -33,9 +30,6 @@ const schema = z.object({
   RABBITMQ_SHOP_CREATED_QUEUE: z.string().default('warehouse_service.shop_created'),
   RABBITMQ_SHOP_UPDATED_QUEUE: z.string().default('warehouse_service.shop_updated'),
   RABBITMQ_SHOP_DELETED_QUEUE: z.string().default('warehouse_service.shop_deleted'),
-  RABBITMQ_ORDER_CREATED_QUEUE: z.string().default('warehouse_service.order_created'),
-  RABBITMQ_ORDER_PAID_QUEUE: z.string().default('warehouse_service.order_paid'),
-  RABBITMQ_ORDER_CANCELLED_QUEUE: z.string().default('warehouse_service.order_cancelled'),
 
   RABBITMQ_PRODUCT_CREATED_DLQ: z.string().default('warehouse_service.product_created.dlq'),
   RABBITMQ_PRODUCT_UPDATED_DLQ: z.string().default('warehouse_service.product_updated.dlq'),
@@ -43,13 +37,7 @@ const schema = z.object({
   RABBITMQ_SHOP_CREATED_DLQ: z.string().default('warehouse_service.shop_created.dlq'),
   RABBITMQ_SHOP_UPDATED_DLQ: z.string().default('warehouse_service.shop_updated.dlq'),
   RABBITMQ_SHOP_DELETED_DLQ: z.string().default('warehouse_service.shop_deleted.dlq'),
-  RABBITMQ_ORDER_CREATED_DLQ: z.string().default('warehouse_service.order_created.dlq'),
-  RABBITMQ_ORDER_PAID_DLQ: z.string().default('warehouse_service.order_paid.dlq'),
-  RABBITMQ_ORDER_CANCELLED_DLQ: z.string().default('warehouse_service.order_cancelled.dlq'),
 
-  RABBITMQ_STOCK_RESERVED_KEY: z.string().default('stock.reserved'),
-  RABBITMQ_STOCK_REJECTED_KEY: z.string().default('stock.rejected'),
-  RABBITMQ_STOCK_CONFIRMED_KEY: z.string().default('stock.confirmed'),
   RABBITMQ_INVENTORY_UPDATED_KEY: z.string().default('inventory.updated'),
   RABBITMQ_INVENTORY_LOW_STOCK_KEY: z.string().default('inventory.low_stock'),
 
@@ -59,9 +47,6 @@ const schema = z.object({
   OUTBOX_PUBLISH_BATCH_SIZE: z.coerce.number().int().positive().default(100),
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().positive().default(20),
 
-  RESERVATION_EXPIRY_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
-  RESERVATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
-  RESERVATION_CLEANUP_INTERVAL_HOURS: z.coerce.number().int().positive().default(24),
 });
 
 const parsed = schema.safeParse(process.env);

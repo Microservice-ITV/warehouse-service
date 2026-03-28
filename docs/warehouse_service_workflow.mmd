@@ -1,0 +1,75 @@
+%% Warehouse Service - Step-by-Step Workflow
+%% Use at https://mermaid.live to export as PNG/SVG
+%%
+%% HOW TO READ: Top to bottom — ① Warehouses → ② Inventory → ③ Stock Validation → ④ Order Stock Flows → ⑤ Sync from Product/Shop
+%% Full JSON samples: PAYLOAD_REFERENCE.md
+
+flowchart TB
+    subgraph F1["① WAREHOUSES (REST API)"]
+        direction TB
+        A1[👤 Admin] -->|"Step 1: POST/GET/PATCH"| API1[🌐 REST API]
+        API1 -->|"Step 2"| WS1[📦 Warehouse Service]
+        WS1 -->|"Step 3"| DB1[(🗄️ DB)]
+        subgraph PK1["Payload"]
+            PL1A["POST: shopId, name, location, isDefault"]
+            PL1B["GET ?shopId=uuid"]
+            PL1C["PATCH: name, location, status"]
+        end
+    end
+
+    subgraph F2["② INVENTORY OPERATIONS (REST API)"]
+        direction TB
+        A2[👤 Admin] -->|"Step 1: POST"| API2[🌐 REST API]
+        API2 -->|"Step 2"| INV2[📋 Inventory Service]
+        INV2 -->|"Step 3"| DB2[(🗄️ DB)]
+        INV2 -->|"Step 4: inventory.updated / inventory.low_stock"| MQ2[📨 MQ]
+        subgraph PK2["Payload"]
+            PL2A["increase: warehouseId, productId, quantity, referenceId"]
+            PL2B["adjust: warehouseId, productId, quantity, referenceId"]
+            PL2C["transfer: fromWarehouseId, toWarehouseId, productId, quantity"]
+            PL2D["count: warehouseId, productId, countedQty, referenceId"]
+            PL2E["receive: warehouseId, productId, quantity, referenceType, referenceId"]
+        end
+    end
+
+    subgraph F3["③ STOCK VALIDATION (Order Service → Warehouse)"]
+        direction TB
+        OS3[🛒 Order Service] -->|"Step 1: POST /products/validate-stock"| API3[🌐 REST API]
+        API3 -->|"Step 2"| INV3[📋 Inventory Service]
+        INV3 -->|"Step 3: Response"| OS3
+        subgraph PK3["Payload"]
+            PL3A["Request: items: [{ product_id, qty }]"]
+            PL3B["Response: stock_validation, items: product_id, qty, reason, available_stock"]
+        end
+    end
+
+    subgraph F4["④ ORDER STOCK FLOWS (MQ Events)"]
+        direction TB
+        MQ4A[📨 order.created] -->|"Step 1"| RES4[📋 Reservation Service]
+        RES4 -->|"Step 2: Reserve stock"| DB4[(🗄️ DB)]
+        RES4 -->|"Step 3: stock.reserved / stock.rejected"| MQ4B[📨 MQ]
+        MQ4C[📨 order.paid] -->|"Step 4"| RES4
+        RES4 -->|"Step 5: Confirm reservation"| DB4
+        RES4 -->|"Step 6: stock.confirmed"| MQ4B
+        MQ4D[📨 order.cancelled] -->|"Step 7"| RES4
+        RES4 -->|"Step 8: Release reservation"| DB4
+        subgraph PK4["Payload"]
+            PL4A["order.created: checkout_id, expires_at, items: [{ product_id, qty, shop_id }]"]
+            PL4B["order.paid: checkout_id, reservation_id?, order_id?"]
+            PL4C["order.cancelled: checkout_id, reservation_id?"]
+            PL4D["stock.reserved: checkout_id, reservation_id"]
+            PL4E["stock.rejected: checkout_id, reason"]
+            PL4F["stock.confirmed: checkout_id, reservation_id, order_id?"]
+        end
+    end
+
+    subgraph F5["⑤ SYNC FROM PRODUCT / SHOP (MQ Consumers)"]
+        direction TB
+        MQ5A[📨 product.created/updated/deleted] -->|"Step 1"| CONS5[📋 Warehouse Service]
+        MQ5B[📨 shop.created/updated/deleted] -->|"Step 1"| CONS5
+        CONS5 -->|"Step 2: Product snapshot / Default warehouse"| DB5[(🗄️ DB)]
+        subgraph PK5["Payload"]
+            PL5A["product.*: product_id, shop_id, stock, sku, title, ..."]
+            PL5B["shop.*: shop_id, name, slug, is_active"]
+        end
+    end

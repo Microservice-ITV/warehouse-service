@@ -1,11 +1,11 @@
 import { ProductSnapshotRepository } from '@/repositories/productSnapshot.repository';
-import { ReservationService } from '@/services/reservation.service';
+import { InventoryService } from '@/services/inventory.service';
 import type { ProductEventData } from '@/events/types';
 import { ValidationError } from '@/utils/errors';
 
 export class ProductSnapshotService {
   private readonly productSnapshotRepository = new ProductSnapshotRepository();
-  private readonly reservationService = new ReservationService();
+  private readonly inventoryService = new InventoryService();
 
   async upsertFromProductEvent(data: ProductEventData) {
     if (!data.product_id || !data.shop_id) {
@@ -22,10 +22,9 @@ export class ProductSnapshotService {
 
     const images = Array.isArray(data.images) ? data.images.map((value) => String(value)) : [];
 
-    await this.reservationService.createInventoryForProduct({
+    await this.inventoryService.ensureInventoryRowsForProduct({
       productId: data.product_id,
       shopId: data.shop_id,
-      initialStock: data.stock,
     });
 
     return this.productSnapshotRepository.upsert({

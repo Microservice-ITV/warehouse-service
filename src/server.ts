@@ -4,8 +4,6 @@ import env from '@/config/env';
 import logger from '@/utils/logger';
 import { startRabbitMQ } from '@/rabbitmq';
 import { startOutboxPublisherJob } from '@/rabbitmq/jobs/outboxPublisher.job';
-import { startReservationCleanupJob } from '@/rabbitmq/jobs/reservationCleanup.job';
-import { startReservationExpiryJob } from '@/rabbitmq/jobs/reservationExpiry.job';
 import { closeRabbitConnection } from '@/rabbitmq/connection';
 
 const bootstrap = async () => {
@@ -18,8 +16,6 @@ const bootstrap = async () => {
 
   await startRabbitMQ();
   startOutboxPublisherJob();
-  startReservationExpiryJob();
-  startReservationCleanupJob();
 };
 
 bootstrap().catch((error) => {
