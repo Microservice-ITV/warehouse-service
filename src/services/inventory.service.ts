@@ -5,6 +5,7 @@ import { InventoryRepository } from '@/repositories/inventory.repository';
 import { MovementRepository } from '@/repositories/movement.repository';
 import { ProductSnapshotRepository } from '@/repositories/productSnapshot.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
+import { WarehouseService } from '@/services/warehouse.service';
 import { NotFoundError, ValidationError } from '@/utils/errors';
 import { EventsPublisher } from '@/publishers/events.publisher';
 
@@ -21,8 +22,30 @@ export class InventoryService {
   private readonly movementRepository = new MovementRepository();
   private readonly productSnapshotRepository = new ProductSnapshotRepository();
   private readonly warehouseRepository = new WarehouseRepository();
+  private readonly warehouseService = new WarehouseService();
   private readonly eventsPublisher = new EventsPublisher();
   private readonly threshold = env.LOW_STOCK_THRESHOLD;
+
+  /**
+   * Ensures inventory rows exist for this product across the shop's warehouses (starting at 0).
+   * Called when catalog events create/update a product snapshot.
+   */
+  async ensureInventoryRowsForProduct(input: { productId: string; shopId: string }) {
+    let warehouses = await this.warehouseRepository.findActiveByShop(input.shopId);
+    if (warehouses.length === 0) {
+      await this.warehouseService.ensureDefaultWarehouse(input.shopId);
+      warehouses = await this.warehouseRepository.findActiveByShop(input.shopId);
+    }
+    await prisma.$transaction(async (tx) => {
+      for (const warehouse of warehouses) {
+        await this.inventoryRepository.upsertByWarehouseAndProduct(
+          warehouse.id,
+          input.productId,
+          tx
+        );
+      }
+    });
+  }
 
   async maybePublishLowStock(params: {
     warehouseId: string;
@@ -323,7 +346,7 @@ export class InventoryService {
       );
       if (!existing) throw new NotFoundError('Inventory not found');
 
-      const delta = input.countedQty - (existing.availableStock + existing.reservedStock);
+      const delta = input.countedQty - existing.availableStock;
       if (delta === 0) return existing;
 
       const updated = await this.inventoryRepository.incrementStocks({
@@ -341,7 +364,7 @@ export class InventoryService {
         referenceId: input.referenceId,
         referenceType: 'STOCK_TAKE',
         correlationId: input.referenceId,
-        metadata: { countedQty: input.countedQty, previousStock: existing.availableStock + existing.reservedStock },
+        metadata: { countedQty: input.countedQty, previousStock: existing.availableStock },
         db: tx,
       });
 
@@ -458,7 +481,7 @@ export class InventoryService {
     const results = productIds.map((productId) => {
       const requestedQty = requested.get(productId) || 0;
       const product = productMap.get(productId);
-      const stock = stockMap.get(productId) || { available: 0, reserved: 0, total: 0 };
+      const stock = stockMap.get(productId) || { available: 0, total: 0 };
 
       if (!product) {
         return {
@@ -478,10 +501,13 @@ export class InventoryService {
         sku: product.sku,
         price: unitPrice,
         stock: stock.total,
-        reserved_stock: stock.reserved,
+        reserved_stock: 0,
         available_stock: stock.available,
         currency: product.currency,
         category_id: product.categoryId,
+        parent_category_id: product.parentCategoryId,
+        parent_category_name: product.parentCategoryName,
+        parent_category_slug: product.parentCategorySlug,
         shop_id: product.shopId,
         images: product.images,
         image_url: product.imageUrl,

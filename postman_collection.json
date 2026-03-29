@@ -77,6 +77,61 @@
           "response": []
         },
         {
+          "name": "1a. List Warehouses by Shop (JWT)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/warehouses?shopId={{shop_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "warehouses"
+              ],
+              "query": [
+                {
+                  "key": "shopId",
+                  "value": "{{shop_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1b. Get Warehouse (JWT)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/warehouses/{{warehouse_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "warehouses",
+                "{{warehouse_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
           "name": "2. Update Warehouse (JWT)",
           "request": {
             "method": "PATCH",

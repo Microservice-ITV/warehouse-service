@@ -8,6 +8,11 @@ export interface ProductEventData {
   stock?: number;
   currency?: string;
   category_id?: string;
+  category_name?: string;
+  category_slug?: string;
+  parent_category_id?: string | null;
+  parent_category_name?: string | null;
+  parent_category_slug?: string | null;
   shop_id: string;
   images?: string[];
   image_url?: string | null;
