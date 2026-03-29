@@ -7,6 +7,9 @@ export type ProductSnapshotUpsertInput = {
   productId: string;
   shopId: string;
   categoryId?: string | null;
+  parentCategoryId?: string | null;
+  parentCategoryName?: string | null;
+  parentCategorySlug?: string | null;
   slug?: string | null;
   title: string;
   description?: string | null;
@@ -26,6 +29,9 @@ export class ProductSnapshotRepository {
         productId: input.productId,
         shopId: input.shopId,
         categoryId: input.categoryId ?? null,
+        parentCategoryId: input.parentCategoryId ?? null,
+        parentCategoryName: input.parentCategoryName ?? null,
+        parentCategorySlug: input.parentCategorySlug ?? null,
         slug: input.slug ?? null,
         title: input.title,
         description: input.description ?? null,
@@ -39,6 +45,9 @@ export class ProductSnapshotRepository {
       update: {
         shopId: input.shopId,
         categoryId: input.categoryId ?? null,
+        parentCategoryId: input.parentCategoryId ?? null,
+        parentCategoryName: input.parentCategoryName ?? null,
+        parentCategorySlug: input.parentCategorySlug ?? null,
         slug: input.slug ?? null,
         title: input.title,
         description: input.description ?? null,

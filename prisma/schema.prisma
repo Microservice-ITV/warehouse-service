@@ -129,6 +129,9 @@ model ProductSnapshot {
   productId   String   @unique
   shopId      String
   categoryId  String?
+  parentCategoryId   String?
+  parentCategoryName String?
+  parentCategorySlug String?
   slug        String?
   title       String
   description String?
