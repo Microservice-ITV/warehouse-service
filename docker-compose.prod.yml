@@ -1,0 +1,59 @@
+name: warehouse-service
+
+services:
+
+  warehouse-app:
+    image: ${DOCKER_USERNAME}/${DOCKER_IMAGE}:${IMAGE_TAG}
+    container_name: ${APP_CONTAINER_NAME}
+    restart: unless-stopped
+    env_file:
+      - ./.env-prod
+    expose:
+      - "5002"
+    depends_on:
+      warehouse-postgres:
+        condition: service_healthy
+    networks:
+      - itv-network
+    environment:
+      NODE_ENV: production
+      RUN_MIGRATIONS: "true"
+      DATABASE_URL: ${DATABASE_URL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    command: ["node", "dist/server.js"]
+
+  warehouse-postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: ${POSTGRES_CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - warehouse-pg-data:/var/lib/postgresql/data
+    networks:
+      - itv-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  warehouse-pg-data:
+
+########################################################
+# EXTERNAL NETWORK (IMPORTANT PART)
+########################################################
+networks:
+  itv-network:
+    external: true
