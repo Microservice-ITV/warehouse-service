@@ -1,0 +1,60 @@
+name: warehouse-service-dev
+
+networks:
+  app-network:
+    name: ${NETWORK_NAME}
+    driver: bridge
+
+services:
+  warehouse-app:
+    container_name: warehouse-service-dev
+    working_dir: /var/www/html/warehouse-service
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${PORT}:5002"
+    env_file:
+      - ./.env
+    depends_on:
+      warehouse-postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/var/www/html/warehouse-service/src:cached
+      - /var/www/html/warehouse-service/node_modules
+    command: npm run dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  warehouse-postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: warehouse-service-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_HOST_PORT}:5432"
+    volumes:
+      - warehouse-pg-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  warehouse-pg-data:
