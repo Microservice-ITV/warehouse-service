@@ -20,7 +20,7 @@ services:
       RUN_MIGRATIONS: "true"
       DATABASE_URL: ${DATABASE_URL}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5002/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -36,7 +36,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5431}:5432"
     volumes:
       - warehouse-pg-data:/var/lib/postgresql/data
     networks:
