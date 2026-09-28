@@ -28,22 +28,23 @@ const baseLogger = winston.createLogger({
   ],
 });
 
-if (env.NODE_ENV !== 'production') {
-  baseLogger.add(
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        winston.format.printf(
-          ({ timestamp, level, message, ...meta }) =>
-            `${timestamp} [${level}]: ${message} ${
-              Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
-            }`
-        )
-      ),
-    })
-  );
-}
+// Always mirror to stdout: `docker logs` is where a crash is first noticed,
+// and in production this logger was file-only — a startup failure (e.g. the
+// RabbitMQ ENOTFOUND crash-loop) left NO trace in docker logs.
+baseLogger.add(
+  new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+      winston.format.printf(
+        ({ timestamp, level, message, ...meta }) =>
+          `${timestamp} [${level}]: ${message} ${
+            Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
+          }`
+      )
+    ),
+  })
+);
 
 const normalizeArgs = (args: unknown[]) => {
   if (args.length === 0) return { message: '', meta: {} as Record<string, unknown> };

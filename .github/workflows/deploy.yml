@@ -124,12 +124,15 @@ jobs:
             #    from inside the container network. Its route is
             #    GET /health (src/app.ts), served on 5002.
             ########################################################
-            echo "⏳ Waiting for warehouse-service (5002/health)..."
+            echo "⏳ Waiting for warehouse-service container healthcheck to report 'healthy'..."
+            APP_CID=$(docker compose -f ${COMPOSE_FILE} ps -q warehouse-app)
             HEALTHY=0
             for i in $(seq 1 24); do
               sleep 5
-              if docker compose -f ${COMPOSE_FILE} exec -T warehouse-app \
-                   curl -fsS http://127.0.0.1:5002/health > /dev/null 2>&1; then
+              # The compose healthcheck (interval 30s, start_period 20s) only
+              # reports 'healthy' if the node process STAYS up — unlike a one-off
+              # exec probe, which can win a race against a crash-looping app.
+              if [ "$(docker inspect --format '{{.State.Health.Status}}' "$APP_CID" 2>/dev/null)" = "healthy" ]; then
                 HEALTHY=1
                 break
               fi
