@@ -1,4 +1,4 @@
-name: 🚀 Payment Service Production Deploy
+name: 🚀 Warehouse Service Production Deploy
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - master
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/payment-service
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/warehouse-service
 
 jobs:
 
@@ -55,7 +55,7 @@ jobs:
 
             set -e
 
-            APP_DIR=/var/www/html/microservices/payment-service
+            APP_DIR=/var/www/html/microservices/warehouse-service
             COMPOSE_FILE=docker-compose.prod.yml
 
             echo "🚀 Starting deployment..."
@@ -67,23 +67,40 @@ jobs:
             cd $APP_DIR
 
             ########################################################
-            # 2. Download compose file from GitHub (same pattern as
-            #    promotion-service — no git/deploy key needed on server)
+            # 2. Download compose file from GitHub
+            #    NOTE: GITHUB_TOKEN only grants read on THIS repo
+            #    (warehouse-service) — never point this at another
+            #    service's repository or it 404s.
             ########################################################
             echo "📄 Downloading ${COMPOSE_FILE}..."
             curl -sfL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -o ${COMPOSE_FILE} \
-              https://raw.githubusercontent.com/Microservice-ITV/payment-service/master/${COMPOSE_FILE}
+              https://raw.githubusercontent.com/Microservice-ITV/warehouse-service/master/${COMPOSE_FILE}
 
             ########################################################
             # 3. Generate .env from GitHub Secrets
-            #    (used for compose substitution AND passed through
-            #     to the container via the `environment:` blocks)
+            #    (compose interpolates ${...} from this file)
             ########################################################
             cat > .env << 'EOF'
             ${{ secrets.PROD_ENV }}
             EOF
             chmod 600 .env
+
+            # Values that MUST match this workflow can never drift from
+            # PROD_ENV: PORT (compose healthcheck/expose hardcode 5002) and
+            # the full image path (compose interpolates
+            # ${DOCKER_USERNAME}/${DOCKER_IMAGE}:${IMAGE_TAG}).
+            awk -F= '!($1 ~ /^(PORT|IMAGE_TAG|DOCKER_IMAGE|DOCKER_USERNAME)$/)' .env > .env.tmp && mv .env.tmp .env
+            {
+              echo "PORT=5002"
+              echo "IMAGE_TAG=latest"
+              echo "DOCKER_IMAGE=warehouse-service"
+              echo "DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}"
+            } >> .env
+
+            # docker-compose.prod.yml declares `env_file: ./.env-prod`;
+            # compose fails without it. Same content is fine for both roles.
+            cp .env .env-prod
 
             ########################################################
             # 4. Docker login (for private images)
@@ -103,18 +120,16 @@ jobs:
 
             ########################################################
             # 7. Health check
-            #    payment-app publishes ${PORT}:${PORT} on the host,
-            #    so localhost:${APP_PORT} is reachable here.
-            #    /api/v1/health is the route registered in src/routes.
+            #    The app is NOT published on a host port, so probe it
+            #    from inside the container network. Its route is
+            #    GET /health (src/app.ts), served on 5002.
             ########################################################
-            APP_PORT=$(grep -E '^[[:space:]]*PORT=' .env | head -1 | cut -d= -f2 | tr -d '[:space:]')
-            APP_PORT=${APP_PORT:-5003}
-
-            echo "⏳ Waiting for payment-service on port ${APP_PORT}..."
+            echo "⏳ Waiting for warehouse-service (5002/health)..."
             HEALTHY=0
             for i in $(seq 1 24); do
               sleep 5
-              if curl -fsS "http://localhost:${APP_PORT}/api/v1/health" > /dev/null 2>&1; then
+              if docker compose -f ${COMPOSE_FILE} exec -T warehouse-app \
+                   curl -fsS http://127.0.0.1:5002/health > /dev/null 2>&1; then
                 HEALTHY=1
                 break
               fi
