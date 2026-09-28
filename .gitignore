@@ -1,8 +1,10 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
+# NOTE: package-lock.json MUST be committed — CI builds use `npm ci` and
+# the Dockerfile COPYs it. An ignored lockfile = "package-lock.json: not
+# found" in Docker builds on CI.
 
 # Build output
 dist/
