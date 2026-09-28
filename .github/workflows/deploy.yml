@@ -1,0 +1,140 @@
+name: 🚀 Payment Service Production Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/payment-service
+
+jobs:
+
+  build-and-push:
+    name: 🐳 Build & Push Image to Docker Hub
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: 🏗️ Build & Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/node/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
+  deploy:
+    name: 🚀 Deploy to VPS (Docker Hub Pull)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: 🚀 SSH Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+
+          script: |
+
+            set -e
+
+            APP_DIR=/var/www/html/microservices/payment-service
+            COMPOSE_FILE=docker-compose.prod.yml
+
+            echo "🚀 Starting deployment..."
+
+            ########################################################
+            # 1. Prepare directory
+            ########################################################
+            mkdir -p $APP_DIR
+            cd $APP_DIR
+
+            ########################################################
+            # 2. Download compose file from GitHub (same pattern as
+            #    promotion-service — no git/deploy key needed on server)
+            ########################################################
+            echo "📄 Downloading ${COMPOSE_FILE}..."
+            curl -sfL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -o ${COMPOSE_FILE} \
+              https://raw.githubusercontent.com/Microservice-ITV/payment-service/master/${COMPOSE_FILE}
+
+            ########################################################
+            # 3. Generate .env from GitHub Secrets
+            #    (used for compose substitution AND passed through
+            #     to the container via the `environment:` blocks)
+            ########################################################
+            cat > .env << 'EOF'
+            ${{ secrets.PROD_ENV }}
+            EOF
+            chmod 600 .env
+
+            ########################################################
+            # 4. Docker login (for private images)
+            ########################################################
+            echo "${{ secrets.DOCKER_TOKEN }}" \
+            | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            ########################################################
+            # 5. Pull images from Docker Hub (NO BUILD)
+            ########################################################
+            docker compose -f ${COMPOSE_FILE} pull
+
+            ########################################################
+            # 6. Start / Update containers
+            ########################################################
+            docker compose -f ${COMPOSE_FILE} up -d --remove-orphans
+
+            ########################################################
+            # 7. Health check
+            #    payment-app publishes ${PORT}:${PORT} on the host,
+            #    so localhost:${APP_PORT} is reachable here.
+            #    /api/v1/health is the route registered in src/routes.
+            ########################################################
+            APP_PORT=$(grep -E '^[[:space:]]*PORT=' .env | head -1 | cut -d= -f2 | tr -d '[:space:]')
+            APP_PORT=${APP_PORT:-5003}
+
+            echo "⏳ Waiting for payment-service on port ${APP_PORT}..."
+            HEALTHY=0
+            for i in $(seq 1 24); do
+              sleep 5
+              if curl -fsS "http://localhost:${APP_PORT}/api/v1/health" > /dev/null 2>&1; then
+                HEALTHY=1
+                break
+              fi
+            done
+
+            docker ps
+
+            if [ "${HEALTHY}" != "1" ]; then
+              echo "❌ Service did not become healthy. Recent logs:"
+              docker compose -f ${COMPOSE_FILE} logs --tail=100
+              exit 1
+            fi
+
+            ########################################################
+            # 8. Cleanup old images
+            #    NOTE: image prune only. `docker system prune -f` is
+            #    deliberately NOT used — the daemon on this VPS is
+            #    shared by every service, and system prune would delete
+            #    other services' stopped containers and build cache.
+            ########################################################
+            docker image prune -f
+
+            echo "✅ Deployment successful!"
