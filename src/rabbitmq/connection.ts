@@ -35,6 +35,7 @@ const setupChannel = async (ch: Channel) => {
   await bindConsumerQueue(ch, rabbitConfig.consume.shopCreated);
   await bindConsumerQueue(ch, rabbitConfig.consume.shopUpdated);
   await bindConsumerQueue(ch, rabbitConfig.consume.shopDeleted);
+  await bindConsumerQueue(ch, rabbitConfig.consume.purchaseGoodsReceived);
 
   ch.prefetch(rabbitConfig.prefetch);
 };
@@ -43,6 +44,22 @@ export const getRabbitChannel = async (): Promise<Channel> => {
   if (channel) return channel;
   const conn = await connect(rabbitConfig.url);
   const ch = await conn.createChannel();
+
+  conn.on('error', (err) => {
+    logger.error({ err }, 'RabbitMQ connection error');
+  });
+  conn.on('close', () => {
+    logger.warn('RabbitMQ connection closed');
+    connection = null;
+    channel = null;
+  });
+  ch.on('error', (err) => {
+    logger.error({ err }, 'RabbitMQ channel error');
+  });
+  ch.on('close', () => {
+    channel = null;
+  });
+
   await setupChannel(ch);
 
   connection = conn;

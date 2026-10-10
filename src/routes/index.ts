@@ -6,26 +6,68 @@ import {
   updateWarehouse,
 } from '@/controllers/warehouse.controller';
 import {
-  adjustStock,
-  countStock,
+  approveTransfer,
   getStockMovements,
   getWarehouseInventory,
   increaseStock,
+  listTransfers,
   receiveStock,
-  transferStock,
+  rejectTransfer,
+  requestTransfer,
   validateProductStock,
 } from '@/controllers/inventory.controller';
+import {
+  createSupplier,
+  getSupplier,
+  listSuppliers,
+  updateSupplier,
+} from '@/controllers/supplier.controller';
+import {
+  applyCostAdjustment,
+  createAdditionalCost,
+  createCostAdjustment,
+  createDeliveryStage,
+  createPurchaseOrder,
+  getPurchaseOrder,
+  listAdditionalCosts,
+  listCostAdjustments,
+  listDeliveryStages,
+  listPurchaseOrders,
+  updatePurchaseOrderStatus,
+} from '@/controllers/purchaseOrder.controller';
+import {
+  confirmPurchaseReceipt,
+  createPurchaseReceipt,
+  getPurchaseReceipt,
+  listPurchaseReceipts,
+} from '@/controllers/purchaseReceipt.controller';
+import {
+  createPurchaseReturn,
+  getPurchaseReturn,
+  listPurchaseReturns,
+  postPurchaseReturn,
+} from '@/controllers/purchaseReturn.controller';
 import { authOrService } from '@/middleware/authOrService';
 import { serviceAuth } from '@/middleware/serviceAuth';
 import { validate } from '@/middleware/validator';
 import {
-  adjustStockSchema,
-  countStockSchema,
   increaseStockSchema,
   receiveStockSchema,
+  transferDecisionSchema,
   transferStockSchema,
   validateProductStockSchema,
 } from '@/validators/inventory.validators';
+import {
+  createAdditionalCostSchema,
+  createCostAdjustmentSchema,
+  createDeliveryStageSchema,
+  createPurchaseOrderSchema,
+  createPurchaseReceiptSchema,
+  createPurchaseReturnSchema,
+  createSupplierSchema,
+  updatePurchaseOrderStatusSchema,
+  updateSupplierSchema,
+} from '@/validators/purchase.validators';
 import { createWarehouseSchema, updateWarehouseSchema } from '@/validators/warehouse.validators';
 
 const router = Router();
@@ -42,10 +84,39 @@ router.get('/warehouses', authOrService, asyncHandler(listWarehouses));
 router.get('/warehouses/:id', authOrService, asyncHandler(getWarehouse));
 router.patch('/warehouses/:id', authOrService, validate(updateWarehouseSchema), asyncHandler(updateWarehouse));
 router.get('/warehouses/:id/inventory', authOrService, asyncHandler(getWarehouseInventory));
+router.post('/suppliers', authOrService, validate(createSupplierSchema), asyncHandler(createSupplier));
+router.get('/suppliers', authOrService, asyncHandler(listSuppliers));
+router.get('/suppliers/:id', authOrService, asyncHandler(getSupplier));
+router.patch('/suppliers/:id', authOrService, validate(updateSupplierSchema), asyncHandler(updateSupplier));
+
+router.post('/purchase-orders', authOrService, validate(createPurchaseOrderSchema), asyncHandler(createPurchaseOrder));
+router.get('/purchase-orders', authOrService, asyncHandler(listPurchaseOrders));
+router.get('/purchase-orders/:id', authOrService, asyncHandler(getPurchaseOrder));
+router.patch('/purchase-orders/:id/status', authOrService, validate(updatePurchaseOrderStatusSchema), asyncHandler(updatePurchaseOrderStatus));
+
+router.get('/purchase-orders/:id/delivery-stages', authOrService, asyncHandler(listDeliveryStages));
+router.post('/purchase-orders/:id/delivery-stages', authOrService, validate(createDeliveryStageSchema), asyncHandler(createDeliveryStage));
+router.get('/purchase-orders/:id/additional-costs', authOrService, asyncHandler(listAdditionalCosts));
+router.post('/purchase-orders/:id/additional-costs', authOrService, validate(createAdditionalCostSchema), asyncHandler(createAdditionalCost));
+router.get('/purchase-orders/:id/cost-adjustments', authOrService, asyncHandler(listCostAdjustments));
+router.post('/purchase-orders/:id/cost-adjustments', authOrService, validate(createCostAdjustmentSchema), asyncHandler(createCostAdjustment));
+router.post('/purchase-cost-adjustments/:id/apply', authOrService, asyncHandler(applyCostAdjustment));
+
+router.post('/purchase-receipts', authOrService, validate(createPurchaseReceiptSchema), asyncHandler(createPurchaseReceipt));
+router.get('/purchase-receipts', authOrService, asyncHandler(listPurchaseReceipts));
+router.get('/purchase-receipts/:id', authOrService, asyncHandler(getPurchaseReceipt));
+router.post('/purchase-receipts/:id/confirm', authOrService, asyncHandler(confirmPurchaseReceipt));
+
+router.post('/purchase-returns', authOrService, validate(createPurchaseReturnSchema), asyncHandler(createPurchaseReturn));
+router.get('/purchase-returns', authOrService, asyncHandler(listPurchaseReturns));
+router.get('/purchase-returns/:id', authOrService, asyncHandler(getPurchaseReturn));
+router.post('/purchase-returns/:id/post', authOrService, asyncHandler(postPurchaseReturn));
+
 router.post('/inventory/increase', authOrService, validate(increaseStockSchema), asyncHandler(increaseStock));
-router.post('/inventory/adjust', authOrService, validate(adjustStockSchema), asyncHandler(adjustStock));
-router.post('/inventory/transfer', authOrService, validate(transferStockSchema), asyncHandler(transferStock));
-router.post('/inventory/count', authOrService, validate(countStockSchema), asyncHandler(countStock));
+router.post('/inventory/transfer', authOrService, validate(transferStockSchema), asyncHandler(requestTransfer));
+router.get('/inventory/transfers', authOrService, asyncHandler(listTransfers));
+router.post('/inventory/transfers/:id/approve', authOrService, validate(transferDecisionSchema), asyncHandler(approveTransfer));
+router.post('/inventory/transfers/:id/reject', authOrService, validate(transferDecisionSchema), asyncHandler(rejectTransfer));
 router.post('/inventory/receive', authOrService, validate(receiveStockSchema), asyncHandler(receiveStock));
 router.get('/inventory/movements', authOrService, asyncHandler(getStockMovements));
 router.post(

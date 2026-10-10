@@ -7,65 +7,58 @@ datasource db {
 }
 
 model Warehouse {
-  id         String      @id @default(uuid())
-  shopId     String
-  name       String
-  location   String?
-  isDefault  Boolean     @default(false)
-  defaultMarker String?  @unique
-  status     WarehouseStatus @default(ACTIVE)
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  inventories Inventory[]
-  movements   StockMovement[]
+  id      String          @id @default(uuid())
+  code    String?         @unique @map("code")
+  name    String
+  address String?
+  status  WarehouseStatus @default(ACTIVE)
 
-  @@index([shopId])
-  @@index([shopId, isDefault])
+  stocks    InventoryStock[]
+  movements InventoryMovement[]
+
   @@index([status])
   @@map("warehouses")
 }
 
-model Inventory {
-  id            String   @id @default(uuid())
-  warehouseId   String
-  productId     String
-  availableStock Int     @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+model InventoryStock {
+  id           String   @id @default(uuid())
+  warehouseId  String   @map("warehouse_id")
+  productId    String   @map("product_id")
+  variantId    String   @default("") @map("variant_id")
+  onHandQty    Int      @default(0) @map("on_hand_qty")
+  reservedQty  Int      @default(0) @map("reserved_qty")
+  availableQty Int      @default(0) @map("available_qty")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  movements StockMovement[]
 
-  @@unique([warehouseId, productId])
+  @@unique([warehouseId, productId, variantId])
   @@index([productId])
-  @@map("inventories")
+  @@map("inventory_stocks")
 }
 
-model StockMovement {
-  id          String            @id @default(uuid())
-  productId   String
-  warehouseId String
-  type        StockMovementType
-  quantity    Int
-  referenceId String
-  referenceType StockMovementReferenceType @default(UNSPECIFIED)
-  checkoutId  String?
-  orderId     String?
-  reservationId String?
-  correlationId String?
-  metadata    Json?
-  createdAt   DateTime          @default(now())
+model InventoryMovement {
+  id            String       @id @default(uuid())
+  warehouseId   String       @map("warehouse_id")
+  productId     String       @map("product_id")
+  variantId     String       @default("") @map("variant_id")
+  movementType  MovementType @map("movement_type")
+  quantity      Int
+  beforeQty     Int          @map("before_qty")
+  afterQty      Int          @map("after_qty")
+  referenceType String?      @map("reference_type")
+  referenceId   String?      @map("reference_id")
+  unitCost      Decimal?     @db.Decimal(12, 2) @map("unit_cost")
+  createdBy     String?      @map("created_by")
+  createdAt     DateTime     @default(now()) @map("created_at")
 
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  inventory Inventory? @relation(fields: [warehouseId, productId], references: [warehouseId, productId], onDelete: Restrict)
 
   @@index([productId, warehouseId])
+  @@index([warehouseId, createdAt])
+  @@index([movementType])
   @@index([referenceId])
-  @@index([referenceType])
-  @@index([checkoutId])
-  @@index([orderId])
-  @@index([reservationId])
-  @@map("stock_movements")
+  @@map("inventory_movements")
 }
 
 model OutboxEvent {
@@ -83,6 +76,24 @@ model OutboxEvent {
 
   @@index([status, createdAt])
   @@map("outbox_events")
+}
+
+/// Transactional outbox for purchase-domain events (GRN received, supplier returns).
+model PurchaseOutboxEvent {
+  id          String       @id @default(uuid())
+  eventId     String       @unique @map("event_id")
+  event       String
+  routingKey  String       @map("routing_key")
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  attempts    Int          @default(0)
+  publishedAt DateTime?    @map("published_at")
+  error       String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("purchase_outbox_events")
 }
 
 model InboxEvent {
@@ -124,6 +135,29 @@ model ProcessedEvent {
   @@map("processed_events")
 }
 
+model WarehouseTransfer {
+  id              String         @id @default(uuid())
+  fromWarehouseId String         @map("from_warehouse_id")
+  toWarehouseId   String         @map("to_warehouse_id")
+  productId       String         @map("product_id")
+  variantId       String         @default("") @map("variant_id")
+  quantity        Int
+  status          TransferStatus @default(PENDING)
+  referenceId     String?        @map("reference_id")
+  referenceType   String?        @map("reference_type")
+  requestedBy     String?        @map("requested_by")
+  decidedBy       String?        @map("decided_by")
+  decidedAt       DateTime?      @map("decided_at")
+  note            String?
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@map("warehouse_transfers")
+}
+
 model ProductSnapshot {
   id          String   @id @default(uuid())
   productId   String   @unique
@@ -154,23 +188,20 @@ enum WarehouseStatus {
   INACTIVE
 }
 
-enum StockMovementType {
-  INBOUND
-  OUTBOUND
-  RESERVED
-  RELEASED
-  ADJUSTMENT
+enum MovementType {
+  PURCHASE_RECEIVED
+  PURCHASE_RETURNED
+  SALE_ISSUED
+  TRANSFER_IN
+  TRANSFER_OUT
+  RETURN_RECEIVED
+  INITIAL_BALANCE
 }
 
-enum StockMovementReferenceType {
-  UNSPECIFIED
-  BOOTSTRAP
-  CHECKOUT
-  RESERVATION
-  MANUAL
-  PO
-  STOCK_TAKE
-  TRANSFER
+enum TransferStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum OutboxStatus {
@@ -183,4 +214,316 @@ enum InboxStatus {
   RECEIVED
   PROCESSED
   FAILED
+}
+
+/// Supplier / vendor master data (purchase domain).
+model Supplier {
+  id          String         @id @default(uuid())
+  name        String
+  code        String?        @unique
+  contactName String?        @map("contact_name")
+  email       String?
+  phone       String?
+  address     String?
+  paymentTerms String?       @map("payment_terms")
+  taxNumber   String?        @map("tax_number")
+  currency    String         @default("USD")
+  status      SupplierStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  purchaseOrders  PurchaseOrder[]
+  purchaseReturns PurchaseReturn[]
+
+  @@index([status])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid())
+  orderNumber    String              @unique @map("order_number")
+  supplierId     String              @map("supplier_id")
+  warehouseId    String              @map("warehouse_id")
+  status         PurchaseOrderStatus @default(DRAFT)
+  currency       String              @default("USD")
+  exchangeRate   Decimal             @default(1) @db.Decimal(14, 6) @map("exchange_rate")
+  paymentTerms   String?             @map("payment_terms")
+  deliveryTerms  String?             @map("delivery_terms")
+  notes          String?
+  orderedAt      DateTime?           @map("ordered_at")
+  expectedAt     DateTime?           @map("expected_at")
+  subtotal       Decimal             @db.Decimal(14, 2)
+  discountAmount Decimal             @default(0) @db.Decimal(14, 2) @map("discount_amount")
+  taxAmount      Decimal             @default(0) @db.Decimal(14, 2) @map("tax_amount")
+  shippingAmount Decimal             @default(0) @db.Decimal(14, 2) @map("shipping_amount")
+  totalAmount    Decimal             @db.Decimal(14, 2) @map("total_amount")
+  createdBy      String?             @map("created_by")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  supplier        Supplier                     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items           PurchaseOrderItem[]
+  receipts        PurchaseReceipt[]
+  returns         PurchaseReturn[]
+  statusHistory   PurchaseOrderStatusHistory[]
+  deliveryStages  PurchaseDeliveryStage[]
+  additionalCosts PurchaseAdditionalCost[]
+  costAdjustments PurchaseCostAdjustment[]
+
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@index([status, createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String   @id @default(uuid())
+  purchaseOrderId String   @map("purchase_order_id")
+  productId       String   @map("product_id")
+  variantId       String   @default("") @map("variant_id")
+  sku             String?
+  productName     String?  @map("product_name")
+  description     String?
+  unit            String?
+  quantity        Int
+  unitCost        Decimal  @db.Decimal(12, 2) @map("unit_cost")
+  discountAmount  Decimal  @default(0) @db.Decimal(14, 2) @map("discount_amount")
+  weightPerUnit   Decimal  @default(0) @db.Decimal(12, 4) @map("weight_per_unit")
+  volumePerUnit   Decimal  @default(0) @db.Decimal(12, 6) @map("volume_per_unit")
+  receivedQty     Int      @default(0) @map("received_qty")
+  acceptedQty     Int      @default(0) @map("accepted_qty")
+  rejectedQty     Int      @default(0) @map("rejected_qty")
+  lineTotal       Decimal  @db.Decimal(14, 2) @map("line_total")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receiptItems  PurchaseReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+  @@map("purchase_order_items")
+}
+
+/// Goods Receipt Note (GRN). Confirming one applies stock to inventory.
+model PurchaseReceipt {
+  id              String                @id @default(uuid())
+  receiptNumber   String                @unique @map("receipt_number")
+  purchaseOrderId String                @map("purchase_order_id")
+  warehouseId     String                @map("warehouse_id")
+  status          PurchaseReceiptStatus @default(DRAFT)
+  notes           String?
+  receivedAt      DateTime?             @map("received_at")
+  createdBy       String?               @map("created_by")
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  items         PurchaseReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([warehouseId])
+  @@index([status])
+  @@map("purchase_receipts")
+}
+
+model PurchaseReceiptItem {
+  id                  String   @id @default(uuid())
+  purchaseReceiptId   String   @map("purchase_receipt_id")
+  purchaseOrderItemId String?  @map("purchase_order_item_id")
+  productId           String   @map("product_id")
+  variantId           String   @default("") @map("variant_id")
+  quantity            Int
+  acceptedQty         Int?     @map("accepted_qty")
+  rejectedQty         Int      @default(0) @map("rejected_qty")
+  unitCost            Decimal  @db.Decimal(12, 2) @map("unit_cost")
+  lineTotal           Decimal  @db.Decimal(14, 2) @map("line_total")
+  batchNumber         String?  @map("batch_number")
+  expiryAt            DateTime? @map("expiry_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  purchaseReceipt   PurchaseReceipt  @relation(fields: [purchaseReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseReceiptId])
+  @@index([productId])
+  @@map("purchase_receipt_items")
+}
+
+model PurchaseReturn {
+  id              String               @id @default(uuid())
+  returnNumber    String               @unique @map("return_number")
+  supplierId      String               @map("supplier_id")
+  purchaseOrderId String?              @map("purchase_order_id")
+  warehouseId     String               @map("warehouse_id")
+  status          PurchaseReturnStatus @default(DRAFT)
+  reason          String?
+  returnedAt      DateTime?            @map("returned_at")
+  createdBy       String?              @map("created_by")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  supplier      Supplier             @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder?       @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  items         PurchaseReturnItem[]
+
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@index([status])
+  @@map("purchase_returns")
+}
+
+model PurchaseReturnItem {
+  id               String   @id @default(uuid())
+  purchaseReturnId String   @map("purchase_return_id")
+  productId        String   @map("product_id")
+  variantId        String   @default("") @map("variant_id")
+  quantity         Int
+  unitCost         Decimal  @db.Decimal(12, 2) @map("unit_cost")
+  lineTotal        Decimal  @db.Decimal(14, 2) @map("line_total")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseReturnId])
+  @@index([productId])
+  @@map("purchase_return_items")
+}
+
+/// Immutable audit trail of purchase order status changes.
+model PurchaseOrderStatusHistory {
+  id              String              @id @default(uuid())
+  purchaseOrderId String              @map("purchase_order_id")
+  status          PurchaseOrderStatus
+  note            String?
+  changedBy       String?             @map("changed_by")
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId, createdAt])
+  @@map("purchase_order_status_history")
+}
+
+/// Multi-stage freight legs for a purchase order (Pickup, Main Freight, Final Delivery...).
+model PurchaseDeliveryStage {
+  id                   String               @id @default(uuid())
+  purchaseOrderId      String               @map("purchase_order_id")
+  sequence             Int                  @default(1)
+  name                 String
+  carrier              String?
+  feeAmount            Decimal              @default(0) @db.Decimal(14, 2) @map("fee_amount")
+  currency             String               @default("USD")
+  allocationMethod     CostAllocationMethod @default(QUANTITY) @map("allocation_method")
+  applicableProductIds String[]             @default([]) @map("applicable_product_ids")
+  notes                String?
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@map("purchase_delivery_stages")
+}
+
+/// Extra procurement expenses (handling, customs, insurance, taxes) with allocation method.
+model PurchaseAdditionalCost {
+  id                   String                  @id @default(uuid())
+  purchaseOrderId      String                  @map("purchase_order_id")
+  name                 String
+  category             AdditionalCostCategory  @default(OTHER)
+  amount               Decimal                 @default(0) @db.Decimal(14, 2)
+  currency             String                  @default("USD")
+  allocationMethod     CostAllocationMethod    @default(QUANTITY) @map("allocation_method")
+  status               CostStatus              @default(ESTIMATED)
+  applicableProductIds String[]                @default([]) @map("applicable_product_ids")
+  notes                String?
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@map("purchase_additional_costs")
+}
+
+/// Late freight / invoice adjustments applied after goods arrival to finalize actual unit costs.
+model PurchaseCostAdjustment {
+  id               String                      @id @default(uuid())
+  adjustmentNumber String                      @unique @map("adjustment_number")
+  purchaseOrderId  String                      @map("purchase_order_id")
+  type             PurchaseCostAdjustmentType  @default(OTHER)
+  amount           Decimal                     @default(0) @db.Decimal(14, 2)
+  currency         String                      @default("USD")
+  allocationMethod CostAllocationMethod        @default(QUANTITY) @map("allocation_method")
+  reason           String?
+  isApplied        Boolean                     @default(false) @map("is_applied")
+  appliedAt        DateTime?                   @map("applied_at")
+  createdBy        String?                     @map("created_by")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@map("purchase_cost_adjustments")
+}
+
+enum SupplierStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PENDING
+  APPROVED
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum PurchaseReceiptStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+enum PurchaseReturnStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+/// How a freight/cost amount is spread across the applicable purchase order lines.
+enum CostAllocationMethod {
+  QUANTITY
+  WEIGHT
+  VOLUME
+  VALUE
+  MANUAL
+}
+
+/// Whether an additional cost figure is an estimate or the finalized actual amount.
+enum CostStatus {
+  ESTIMATED
+  ACTUAL
+}
+
+enum AdditionalCostCategory {
+  HANDLING
+  CUSTOMS
+  INSURANCE
+  TAX
+  FREIGHT
+  OTHER
+}
+
+enum PurchaseCostAdjustmentType {
+  FREIGHT
+  INVOICE
+  OTHER
 }

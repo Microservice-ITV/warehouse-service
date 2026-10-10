@@ -119,3 +119,40 @@ export interface OrderCancelledEvent {
     reservation_id?: string;
   };
 }
+
+export interface PurchaseGoodsReceivedData {
+  receipt_id: string;
+  receipt_number: string;
+  purchase_order_id: string;
+  warehouse_id: string;
+  supplier_id: string;
+  received_at: string;
+  items: Array<{
+    product_id: string;
+    variant_id?: string;
+    quantity: number;
+    unit_cost: number;
+  }>;
+}
+
+export interface PurchaseGoodsReceivedEvent {
+  event_id: string;
+  event: 'purchase.goods_received';
+  correlation_id?: string;
+  producer?: string;
+  data: PurchaseGoodsReceivedData;
+}
+
+export interface PurchaseGoodsReturnedData {
+  return_id: string;
+  return_number: string;
+  warehouse_id: string;
+  supplier_id: string;
+  returned_at: string;
+  items: Array<{
+    product_id: string;
+    variant_id?: string;
+    quantity: number;
+    unit_cost: number;
+  }>;
+}

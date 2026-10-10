@@ -1,65 +1,113 @@
-import { Prisma, type Inventory } from '@prisma/client';
+import { Prisma, type InventoryStock } from '@prisma/client';
 import prisma from '@/config/database';
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
 export class InventoryRepository {
-  async upsertByWarehouseAndProduct(
+  async ensureRow(
     warehouseId: string,
     productId: string,
+    variantId: string,
     db: Db = prisma
-  ): Promise<Inventory> {
-    return db.inventory.upsert({
+  ): Promise<InventoryStock> {
+    const existing = await this.findByKey(warehouseId, productId, variantId, db);
+    if (existing) return existing;
+
+    try {
+      return await db.inventoryStock.create({
+        data: { warehouseId, productId, variantId },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const winner = await this.findByKey(warehouseId, productId, variantId, db);
+        if (winner) return winner;
+      }
+      throw error;
+    }
+  }
+
+  async findByKey(
+    warehouseId: string,
+    productId: string,
+    variantId: string,
+    db: Db = prisma
+  ): Promise<InventoryStock | null> {
+    return db.inventoryStock.findUnique({
       where: {
-        warehouseId_productId: { warehouseId, productId },
+        warehouseId_productId_variantId: { warehouseId, productId, variantId },
       },
-      create: {
-        warehouseId,
-        productId,
-        availableStock: 0,
-      },
-      update: {},
     });
   }
 
-  async listByWarehouse(warehouseId: string, db: Db = prisma) {
-    return db.inventory.findMany({ where: { warehouseId }, orderBy: { updatedAt: 'desc' } });
-  }
-
-  async findByWarehouseAndProduct(
+  async lockByKey(
     warehouseId: string,
     productId: string,
-    db: Db = prisma
-  ) {
-    return db.inventory.findUnique({
-      where: { warehouseId_productId: { warehouseId, productId } },
-    });
-  }
-
-  async incrementStocks(params: {
-    warehouseId: string;
-    productId: string;
-    availableDelta?: number;
-    db: Prisma.TransactionClient;
-  }) {
-    const { warehouseId, productId, availableDelta = 0, db } = params;
-    return db.inventory.update({
-      where: { warehouseId_productId: { warehouseId, productId } },
-      data: {
-        availableStock: { increment: availableDelta },
-      },
-    });
-  }
-
-  async computeTotalStockByShopProduct(shopId: string, productId: string, db: Db = prisma) {
-    const aggregate = await db.inventory.aggregate({
-      where: { productId, warehouse: { shopId } },
-      _sum: { availableStock: true },
-    });
-    const available = aggregate._sum.availableStock ?? 0;
+    variantId: string,
+    tx: Prisma.TransactionClient
+  ): Promise<InventoryStock> {
+    const rows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        warehouse_id: string;
+        product_id: string;
+        variant_id: string;
+        on_hand_qty: number;
+        reserved_qty: number;
+        available_qty: number;
+        updated_at: Date;
+      }>
+    >`
+      SELECT *
+      FROM inventory_stocks
+      WHERE "warehouse_id" = ${warehouseId}
+        AND "product_id" = ${productId}
+        AND "variant_id" = ${variantId}
+      FOR UPDATE
+    `;
+    const row = rows[0];
+    if (!row) {
+      throw new Error(
+        `Inventory stock row missing while locked: ${warehouseId}/${productId}/${variantId}`
+      );
+    }
     return {
-      available,
-      total: available,
+      id: row.id,
+      warehouseId: row.warehouse_id,
+      productId: row.product_id,
+      variantId: row.variant_id,
+      onHandQty: row.on_hand_qty,
+      reservedQty: row.reserved_qty,
+      availableQty: row.available_qty,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async setQuantities(
+    id: string,
+    quantities: { onHandQty: number; reservedQty: number; availableQty: number },
+    db: Db = prisma
+  ): Promise<InventoryStock> {
+    return db.inventoryStock.update({ where: { id }, data: quantities });
+  }
+
+  async listByWarehouse(warehouseId: string, db: Db = prisma): Promise<InventoryStock[]> {
+    return db.inventoryStock.findMany({
+      where: { warehouseId },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async computeTotalsByProductId(
+    productId: string,
+    db: Db = prisma
+  ): Promise<{ available: number; total: number }> {
+    const aggregate = await db.inventoryStock.aggregate({
+      where: { productId },
+      _sum: { availableQty: true, onHandQty: true },
+    });
+    return {
+      available: aggregate._sum.availableQty ?? 0,
+      total: aggregate._sum.onHandQty ?? 0,
     };
   }
 
@@ -70,29 +118,27 @@ export class InventoryRepository {
     if (productIds.length === 0) return new Map();
 
     const rows = await db.$queryRaw<
-      Array<{ productId: string; available: number }>
+      Array<{ productId: string; available: number; total: number }>
     >`
       SELECT
-        i."productId" AS "productId",
-        COALESCE(SUM(i."availableStock"), 0)::int AS "available"
-      FROM inventories i
-      INNER JOIN warehouses w ON w.id = i."warehouseId"
-      WHERE i."productId" IN (${Prisma.join(productIds)})
+        s."product_id" AS "productId",
+        COALESCE(SUM(s."available_qty"), 0)::int AS "available",
+        COALESCE(SUM(s."on_hand_qty"), 0)::int AS "total"
+      FROM inventory_stocks s
+      INNER JOIN warehouses w ON w.id = s."warehouse_id"
+      WHERE s."product_id" IN (${Prisma.join(productIds)})
         AND w.status = 'ACTIVE'
-      GROUP BY i."productId"
+      GROUP BY s."product_id"
     `;
 
     return new Map(
-      rows.map((row) => {
-        const available = Number(row.available) || 0;
-        return [
-          row.productId,
-          {
-            available,
-            total: available,
-          },
-        ];
-      })
+      rows.map((row) => [
+        row.productId,
+        {
+          available: Number(row.available) || 0,
+          total: Number(row.total) || 0,
+        },
+      ])
     );
   }
 }
