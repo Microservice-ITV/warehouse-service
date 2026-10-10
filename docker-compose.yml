@@ -22,14 +22,16 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/var/www/html/warehouse-service/src:cached
+      - ./prisma:/var/www/html/warehouse-service/prisma:cached
+      - ./prisma.config.ts:/var/www/html/warehouse-service/prisma.config.ts:ro
       - /var/www/html/warehouse-service/node_modules
-    command: npm run dev
+    command: ["sh", "-c", "npx prisma generate --schema=prisma/schema.prisma && npm run dev"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5002/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
       interval: 10s
       timeout: 5s
       retries: 10
