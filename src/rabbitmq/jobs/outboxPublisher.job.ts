@@ -57,7 +57,9 @@ export const startOutboxPublisherJob = () => {
         );
       }
     } catch (error) {
-      logger.error({ err: error }, 'outbox publisher loop failed');
+      const message =
+        error instanceof Error ? error.message : 'Unknown outbox publisher error';
+      logger.error({ err: error, message }, 'outbox publisher loop failed');
     }
   }, env.OUTBOX_PUBLISH_INTERVAL_MS);
 };

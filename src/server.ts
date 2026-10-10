@@ -6,7 +6,36 @@ import { startRabbitMQ } from '@/rabbitmq';
 import { startOutboxPublisherJob } from '@/rabbitmq/jobs/outboxPublisher.job';
 import { closeRabbitConnection } from '@/rabbitmq/connection';
 
-const bootstrap = async () => {
+const RABBIT_RETRY_BASE_MS = 5000;
+const RABBIT_RETRY_MAX_MS = 30000;
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const startRabbitWithRetry = async (): Promise<void> => {
+  let attempt = 0;
+  let delayMs = RABBIT_RETRY_BASE_MS;
+  let connected = false;
+
+  while (!connected) {
+    attempt += 1;
+    try {
+      await startRabbitMQ();
+      startOutboxPublisherJob();
+      connected = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      logger.warn(
+        { err: error, attempt, retryInMs: delayMs },
+        `RabbitMQ unavailable (${message}), retrying...`
+      );
+      await delay(delayMs);
+      delayMs = Math.min(delayMs * 2, RABBIT_RETRY_MAX_MS);
+    }
+  }
+};
+
+const bootstrap = async (): Promise<void> => {
   await prisma.$connect();
   logger.info('Database connected');
 
@@ -14,8 +43,7 @@ const bootstrap = async () => {
     logger.info({ port: env.PORT }, 'warehouse-service started');
   });
 
-  await startRabbitMQ();
-  startOutboxPublisherJob();
+  await startRabbitWithRetry();
 };
 
 bootstrap().catch((error) => {

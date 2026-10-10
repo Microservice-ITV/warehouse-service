@@ -24,13 +24,16 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/health', (_req, res) => {
+const healthHandler = (_req: express.Request, res: express.Response) => {
   res.json({
     success: true,
     message: 'Warehouse Service is running',
     timestamp: new Date().toISOString(),
   });
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/api/v1/health', healthHandler);
 
 app.use('/api/v1', routes);
 app.use(errorHandler);
