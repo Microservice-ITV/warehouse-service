@@ -1,12 +1,15 @@
 import type { Prisma } from '@prisma/client';
 import { createEventEnvelope } from '@/events/envelope';
+import type { PurchaseGoodsReceivedData, PurchaseGoodsReturnedData } from '@/events/types';
 import { OutboxRepository } from '@/repositories/outbox.repository';
+import { PurchaseOutboxRepository } from '@/repositories/purchaseOutbox.repository';
 import { rabbitConfig } from '@/config/rabbitmq';
 import prisma from '@/config/database';
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
 const outboxRepository = new OutboxRepository();
+const purchaseOutboxRepository = new PurchaseOutboxRepository();
 
 export class EventsPublisher {
   async publishInventoryUpdated(input: {
@@ -65,6 +68,40 @@ export class EventsPublisher {
       eventId: envelope.event_id,
       event: envelope.event,
       routingKey: rabbitConfig.publish.inventoryLowStock,
+      payload: envelope,
+      db: input.db ?? prisma,
+    });
+    return envelope;
+  }
+
+  /** GRN confirmed inside the purchase domain — emitted from the same transaction. */
+  async publishPurchaseGoodsReceived(input: { data: PurchaseGoodsReceivedData; db?: Db }) {
+    const envelope = createEventEnvelope({
+      event: 'purchase.goods_received',
+      correlationId: input.data.receipt_id,
+      data: input.data,
+    });
+    await purchaseOutboxRepository.enqueue({
+      eventId: envelope.event_id,
+      event: envelope.event,
+      routingKey: rabbitConfig.publish.purchaseGoodsReceived,
+      payload: envelope,
+      db: input.db ?? prisma,
+    });
+    return envelope;
+  }
+
+  /** Supplier return posted inside the purchase domain. */
+  async publishPurchaseGoodsReturned(input: { data: PurchaseGoodsReturnedData; db?: Db }) {
+    const envelope = createEventEnvelope({
+      event: 'purchase.goods_returned',
+      correlationId: input.data.return_id,
+      data: input.data,
+    });
+    await purchaseOutboxRepository.enqueue({
+      eventId: envelope.event_id,
+      event: envelope.event,
+      routingKey: rabbitConfig.publish.purchaseGoodsReturned,
       payload: envelope,
       db: input.db ?? prisma,
     });

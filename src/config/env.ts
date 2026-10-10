@@ -41,6 +41,14 @@ const schema = z.object({
   RABBITMQ_INVENTORY_UPDATED_KEY: z.string().default('inventory.updated'),
   RABBITMQ_INVENTORY_LOW_STOCK_KEY: z.string().default('inventory.low_stock'),
 
+  RABBITMQ_PURCHASE_GOODS_RECEIVED_KEY: z.string().default('purchase.goods_received'),
+  RABBITMQ_PURCHASE_GOODS_RECEIVED_QUEUE: z
+    .string()
+    .default('warehouse_service.purchase_goods_received'),
+  RABBITMQ_PURCHASE_GOODS_RECEIVED_DLQ: z
+    .string()
+    .default('warehouse_service.purchase_goods_received.dlq'),
+
   LOW_STOCK_THRESHOLD: z.coerce.number().int().min(0).default(5),
 
   OUTBOX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(3000),

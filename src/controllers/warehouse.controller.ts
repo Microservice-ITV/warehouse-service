@@ -26,6 +26,6 @@ export const listWarehouses = async (req: Request, res: Response) => {
     throw new ValidationError(parsed.error.errors.map((e) => e.message).join(', '));
   }
 
-  const data = await warehouseService.listWarehousesByShop(parsed.data.shopId);
+  const data = await warehouseService.listWarehouses({ status: parsed.data.status });
   return res.status(200).json({ success: true, data });
 };
