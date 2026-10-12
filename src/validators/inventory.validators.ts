@@ -79,6 +79,9 @@ export const listTransfersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
-export const transferDecisionSchema = z.object({
-  note: z.string().max(500).optional(),
-});
+export const transferDecisionSchema = z.preprocess(
+  (value) => (value == null || value === '' ? {} : value),
+  z.object({
+    note: z.string().max(500).nullish(),
+  })
+);

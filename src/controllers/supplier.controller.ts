@@ -28,3 +28,8 @@ export const updateSupplier = async (req: Request, res: Response) => {
   const supplier = await supplierService.update(req.params.id, req.body);
   return res.status(200).json({ success: true, data: supplier });
 };
+
+export const deleteSupplier = async (req: Request, res: Response) => {
+  await supplierService.delete(req.params.id);
+  return res.status(200).json({ success: true });
+};

@@ -75,9 +75,9 @@ export class InventoryRepository {
       warehouseId: row.warehouse_id,
       productId: row.product_id,
       variantId: row.variant_id,
-      onHandQty: row.on_hand_qty,
-      reservedQty: row.reserved_qty,
-      availableQty: row.available_qty,
+      onHandQty: Number(row.on_hand_qty),
+      reservedQty: Number(row.reserved_qty),
+      availableQty: Number(row.available_qty),
       updatedAt: row.updated_at,
     };
   }
@@ -94,6 +94,20 @@ export class InventoryRepository {
     return db.inventoryStock.findMany({
       where: { warehouseId },
       orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async listByProduct(productId: string, db: Db = prisma): Promise<InventoryStock[]> {
+    return db.inventoryStock.findMany({ where: { productId } });
+  }
+
+  async listByProductInWarehouse(
+    warehouseId: string,
+    productId: string,
+    db: Db = prisma
+  ): Promise<InventoryStock[]> {
+    return db.inventoryStock.findMany({
+      where: { warehouseId, productId },
     });
   }
 

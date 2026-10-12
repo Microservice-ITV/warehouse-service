@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   createWarehouse,
+  deleteWarehouse,
   getWarehouse,
   listWarehouses,
   updateWarehouse,
@@ -18,6 +19,7 @@ import {
 } from '@/controllers/inventory.controller';
 import {
   createSupplier,
+  deleteSupplier,
   getSupplier,
   listSuppliers,
   updateSupplier,
@@ -29,6 +31,7 @@ import {
   createDeliveryStage,
   createPurchaseOrder,
   getPurchaseOrder,
+  downloadPurchaseOrderAttachment,
   listAdditionalCosts,
   listCostAdjustments,
   listDeliveryStages,
@@ -83,15 +86,22 @@ router.post('/warehouses', authOrService, validate(createWarehouseSchema), async
 router.get('/warehouses', authOrService, asyncHandler(listWarehouses));
 router.get('/warehouses/:id', authOrService, asyncHandler(getWarehouse));
 router.patch('/warehouses/:id', authOrService, validate(updateWarehouseSchema), asyncHandler(updateWarehouse));
+router.delete('/warehouses/:id', authOrService, asyncHandler(deleteWarehouse));
 router.get('/warehouses/:id/inventory', authOrService, asyncHandler(getWarehouseInventory));
 router.post('/suppliers', authOrService, validate(createSupplierSchema), asyncHandler(createSupplier));
 router.get('/suppliers', authOrService, asyncHandler(listSuppliers));
 router.get('/suppliers/:id', authOrService, asyncHandler(getSupplier));
 router.patch('/suppliers/:id', authOrService, validate(updateSupplierSchema), asyncHandler(updateSupplier));
+router.delete('/suppliers/:id', authOrService, asyncHandler(deleteSupplier));
 
 router.post('/purchase-orders', authOrService, validate(createPurchaseOrderSchema), asyncHandler(createPurchaseOrder));
 router.get('/purchase-orders', authOrService, asyncHandler(listPurchaseOrders));
 router.get('/purchase-orders/:id', authOrService, asyncHandler(getPurchaseOrder));
+router.get(
+  '/purchase-orders/:id/attachments/:attachmentId',
+  authOrService,
+  asyncHandler(downloadPurchaseOrderAttachment),
+);
 router.patch('/purchase-orders/:id/status', authOrService, validate(updatePurchaseOrderStatusSchema), asyncHandler(updatePurchaseOrderStatus));
 
 router.get('/purchase-orders/:id/delivery-stages', authOrService, asyncHandler(listDeliveryStages));

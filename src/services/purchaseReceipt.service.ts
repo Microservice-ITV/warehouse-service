@@ -59,6 +59,9 @@ export class PurchaseReceiptService {
       where: { id: input.purchaseOrderId },
     });
     if (!order) throw new NotFoundError('Purchase order not found');
+    if (order.status !== 'ORDERED' && order.status !== 'PARTIALLY_RECEIVED') {
+      throw new ValidationError('Goods can be received only after the purchase order is ordered');
+    }
     if (input.items.length === 0) throw new ValidationError('At least one item is required');
 
     const items = input.items.map((item) => ({

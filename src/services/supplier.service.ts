@@ -1,6 +1,6 @@
-import type { SupplierStatus } from '@prisma/client';
+import { Prisma, type SupplierStatus } from '@prisma/client';
 import prisma from '@/config/database';
-import { NotFoundError } from '@/utils/errors';
+import { ConflictError, NotFoundError } from '@/utils/errors';
 
 export class SupplierService {
   async list(params: { status?: SupplierStatus } = {}) {
@@ -61,5 +61,17 @@ export class SupplierService {
   ) {
     await this.get(id);
     return prisma.supplier.update({ where: { id }, data: input });
+  }
+
+  async delete(id: string) {
+    await this.get(id);
+    try {
+      await prisma.supplier.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictError('This supplier has purchase history and cannot be deleted.');
+      }
+      throw error;
+    }
   }
 }
