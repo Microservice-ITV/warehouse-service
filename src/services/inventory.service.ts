@@ -224,79 +224,91 @@ export class InventoryService {
       if (!toWarehouse) throw new NotFoundError('Destination warehouse not found');
 
       const referenceId = transfer.referenceId ?? transfer.id;
-      const variantId = transfer.variantId || undefined;
+      const plan = await this.planTransferDeductions(tx, transfer, fromWarehouse.name);
 
-      const source = await this.applyDelta(tx, {
-        warehouseId: transfer.fromWarehouseId,
-        productId: transfer.productId,
-        variantId,
-        delta: -transfer.quantity,
-        minAvailable: transfer.quantity,
-        errorMessage: 'Insufficient available stock in source warehouse',
-      });
+      let sourceStock: InventoryStock | null = null;
+      let destinationStock: InventoryStock | null = null;
 
-      const destination = await this.applyDelta(tx, {
-        warehouseId: transfer.toWarehouseId,
-        productId: transfer.productId,
-        variantId,
-        delta: transfer.quantity,
-      });
+      for (const step of plan) {
+        const source = await this.applyDelta(tx, {
+          warehouseId: transfer.fromWarehouseId,
+          productId: transfer.productId,
+          variantId: step.variantId,
+          delta: -step.quantity,
+          minAvailable: step.quantity,
+          errorMessage: 'Not enough stock',
+        });
+        sourceStock = source.stock;
 
-      await this.movementRepository.create({
-        warehouseId: transfer.fromWarehouseId,
-        productId: transfer.productId,
-        variantId,
-        movementType: 'TRANSFER_OUT',
-        quantity: source.afterQty - source.beforeQty,
-        beforeQty: source.beforeQty,
-        afterQty: source.afterQty,
-        referenceType: transfer.referenceType ?? 'TRANSFER',
-        referenceId,
-        createdBy: input.decidedBy ?? transfer.requestedBy,
-        db: tx,
-      });
+        const destination = await this.applyDelta(tx, {
+          warehouseId: transfer.toWarehouseId,
+          productId: transfer.productId,
+          variantId: step.variantId,
+          delta: step.quantity,
+        });
+        destinationStock = destination.stock;
 
-      await this.movementRepository.create({
-        warehouseId: transfer.toWarehouseId,
-        productId: transfer.productId,
-        variantId,
-        movementType: 'TRANSFER_IN',
-        quantity: destination.afterQty - destination.beforeQty,
-        beforeQty: destination.beforeQty,
-        afterQty: destination.afterQty,
-        referenceType: transfer.referenceType ?? 'TRANSFER',
-        referenceId,
-        createdBy: input.decidedBy ?? transfer.requestedBy,
-        db: tx,
-      });
+        await this.movementRepository.create({
+          warehouseId: transfer.fromWarehouseId,
+          productId: transfer.productId,
+          variantId: step.variantId,
+          movementType: 'TRANSFER_OUT',
+          quantity: source.afterQty - source.beforeQty,
+          beforeQty: source.beforeQty,
+          afterQty: source.afterQty,
+          referenceType: transfer.referenceType ?? 'TRANSFER',
+          referenceId,
+          createdBy: input.decidedBy ?? transfer.requestedBy,
+          db: tx,
+        });
+
+        await this.movementRepository.create({
+          warehouseId: transfer.toWarehouseId,
+          productId: transfer.productId,
+          variantId: step.variantId,
+          movementType: 'TRANSFER_IN',
+          quantity: destination.afterQty - destination.beforeQty,
+          beforeQty: destination.beforeQty,
+          afterQty: destination.afterQty,
+          referenceType: transfer.referenceType ?? 'TRANSFER',
+          referenceId,
+          createdBy: input.decidedBy ?? transfer.requestedBy,
+          db: tx,
+        });
+      }
 
       const shopId = await this.publishStockChange(tx, {
         productId: transfer.productId,
         warehouseId: transfer.fromWarehouseId,
         correlationId: referenceId,
-        localAvailable: source.stock.availableQty,
+        localAvailable: sourceStock?.availableQty ?? 0,
       });
-      if (shopId) {
+      if (shopId && destinationStock) {
         await this.maybePublishLowStock({
           warehouseId: transfer.toWarehouseId,
           productId: transfer.productId,
           shopId,
-          availableStock: destination.stock.availableQty,
+          availableStock: destinationStock.availableQty,
           correlationId: referenceId,
           db: tx,
         });
       }
 
-      const updated = await this.transferRepository.decide(transfer.id, {
-        decidedBy: input.decidedBy,
-        note: input.note,
-        status: 'APPROVED',
-      });
+      const updated = await this.transferRepository.decide(
+        transfer.id,
+        {
+          decidedBy: input.decidedBy,
+          note: input.note,
+          status: 'APPROVED',
+          variantId: plan.length === 1 ? plan[0].variantId : undefined,
+        },
+        tx
+      );
 
       return {
         transfer: updated,
-        fromWarehouse: withAvailability(source.stock),
-        toWarehouse: withAvailability(destination.stock),
+        fromWarehouse: withAvailability(sourceStock!),
+        toWarehouse: withAvailability(destinationStock!),
       };
     });
   }
@@ -638,6 +650,80 @@ export class InventoryService {
     return shopId;
   }
 
+  /**
+   * Stock for a product can sit on a different variant row than the transfer
+   * recorded (the transfer form no longer sends a variant). Take from every
+   * row in the source warehouse until the requested quantity is covered.
+   */
+  private movableQty(row: Pick<InventoryStock, 'onHandQty' | 'reservedQty' | 'availableQty'>) {
+    const onHand = Number(row.onHandQty) || 0;
+    const reserved = Number(row.reservedQty) || 0;
+    const available = Number(row.availableQty) || 0;
+    return Math.max(0, available, onHand - reserved);
+  }
+
+  private async notEnoughStockMessage(
+    tx: Prisma.TransactionClient,
+    transfer: { fromWarehouseId: string; productId: string; quantity: number },
+    rows: InventoryStock[],
+    warehouseName: string
+  ) {
+    const onHand = rows.reduce((sum, row) => sum + (Number(row.onHandQty) || 0), 0);
+    const reserved = rows.reduce((sum, row) => sum + (Number(row.reservedQty) || 0), 0);
+    const available = rows.reduce((sum, row) => sum + this.movableQty(row), 0);
+    const reservedNote =
+      reserved > 0 ? ` On hand is ${onHand}, and ${reserved} is reserved.` : '';
+
+    const elsewhere = (
+      await this.inventoryRepository.listByProduct(transfer.productId, tx)
+    ).filter((row) => row.warehouseId !== transfer.fromWarehouseId && this.movableQty(row) > 0);
+    const elsewhereQty = elsewhere.reduce((sum, row) => sum + this.movableQty(row), 0);
+    const elsewhereNote =
+      elsewhereQty > 0
+        ? ` Other warehouses have ${elsewhereQty}, and that stock is not part of this transfer.`
+        : '';
+
+    return `Not enough stock in ${warehouseName}. Available ${available}, requested ${transfer.quantity}.${reservedNote}${elsewhereNote}`;
+  }
+
+  private async planTransferDeductions(
+    tx: Prisma.TransactionClient,
+    transfer: { fromWarehouseId: string; productId: string; variantId: string; quantity: number },
+    warehouseName: string
+  ): Promise<Array<{ variantId: string; quantity: number }>> {
+    const rows = await this.inventoryRepository.listByProductInWarehouse(
+      transfer.fromWarehouseId,
+      transfer.productId,
+      tx
+    );
+
+    const preferred = transfer.variantId || '';
+    const ranked = [...rows].sort((a, b) => {
+      if (a.variantId === preferred && b.variantId !== preferred) return -1;
+      if (b.variantId === preferred && a.variantId !== preferred) return 1;
+      return this.movableQty(b) - this.movableQty(a);
+    });
+
+    let remaining = transfer.quantity;
+    const plan: Array<{ variantId: string; quantity: number }> = [];
+    for (const row of ranked) {
+      if (remaining <= 0) break;
+      const movable = this.movableQty(row);
+      if (movable <= 0) continue;
+      const take = Math.min(movable, remaining);
+      plan.push({ variantId: row.variantId, quantity: take });
+      remaining -= take;
+    }
+
+    if (remaining > 0 || plan.length === 0) {
+      throw new ValidationError(
+        await this.notEnoughStockMessage(tx, transfer, rows, warehouseName)
+      );
+    }
+
+    return plan;
+  }
+
   private async applyDelta(
     tx: Prisma.TransactionClient,
     params: {
@@ -663,23 +749,35 @@ export class InventoryService {
       tx
     );
 
-    const beforeQty = locked.onHandQty;
-    const beforeAvailable = locked.onHandQty - locked.reservedQty;
+    const onHand = Number(locked.onHandQty) || 0;
+    const reserved = Number(locked.reservedQty) || 0;
+    const recordedAvailable = Number(locked.availableQty) || 0;
+    const computedAvailable = onHand - reserved;
+    const beforeAvailable = Math.max(0, computedAvailable, recordedAvailable);
     if (params.minAvailable !== undefined && beforeAvailable < params.minAvailable) {
       throw new ValidationError(
-        params.errorMessage ?? 'Insufficient available stock in source warehouse'
+        params.errorMessage
+          ? `${params.errorMessage}. Available ${beforeAvailable}, requested ${params.minAvailable}.`
+          : `Not enough stock. Available ${beforeAvailable}, requested ${params.minAvailable}.`
       );
     }
 
+    const beforeQty = recordedAvailable > computedAvailable ? recordedAvailable + reserved : onHand;
     const afterQty = beforeQty + params.delta;
-    if (afterQty < 0) throw new ValidationError('Cannot reduce stock below zero');
+    if (afterQty < 0) {
+      throw new ValidationError(
+        params.errorMessage
+          ? `${params.errorMessage}. Available ${beforeAvailable}, requested ${params.minAvailable ?? Math.abs(params.delta)}.`
+          : 'Cannot reduce stock below zero'
+      );
+    }
 
     const stock = await this.inventoryRepository.setQuantities(
       locked.id,
       {
         onHandQty: afterQty,
-        reservedQty: locked.reservedQty,
-        availableQty: afterQty - locked.reservedQty,
+        reservedQty: reserved,
+        availableQty: afterQty - reserved,
       },
       tx
     );

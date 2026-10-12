@@ -2,13 +2,25 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '@/utils/errors';
 import logger from '@/utils/logger';
 
+const unwrapAppError = (error: unknown): AppError | null => {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    if (current instanceof AppError) return current;
+    seen.add(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return null;
+};
+
 export const errorHandler = (
   error: Error,
   req: Request,
   res: Response,
   _next: NextFunction
 ) => {
-  if (error instanceof AppError) {
+  const appError = error instanceof AppError ? error : unwrapAppError(error);
+  if (appError) {
     logger.warn(
       {
         err: error,
@@ -17,9 +29,9 @@ export const errorHandler = (
       },
       'request failed'
     );
-    return res.status(error.statusCode).json({
+    return res.status(appError.statusCode).json({
       success: false,
-      error: { code: error.code, message: error.message },
+      error: { code: appError.code, message: appError.message },
     });
   }
 

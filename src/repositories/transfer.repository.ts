@@ -67,6 +67,7 @@ export class TransferRepository {
       status: TransferStatus;
       decidedBy?: string | null;
       note?: string | null;
+      variantId?: string;
     },
     db: Db = prisma
   ): Promise<WarehouseTransfer> {
@@ -77,6 +78,7 @@ export class TransferRepository {
         decidedBy: params.decidedBy ?? null,
         decidedAt: new Date(),
         note: params.note ?? null,
+        ...(params.variantId !== undefined ? { variantId: params.variantId } : {}),
       },
     });
   }

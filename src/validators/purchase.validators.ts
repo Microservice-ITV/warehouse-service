@@ -102,6 +102,8 @@ export const createPurchaseOrderSchema = z.object({
   paymentTerms: z.string().max(120).nullable().optional(),
   deliveryTerms: z.string().max(120).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
+  supplierContact: z.string().max(300).nullable().optional(),
+  orderDate: z.string().datetime().nullable().optional(),
   expectedAt: z.string().datetime().nullable().optional(),
   discountAmount: z.number().nonnegative().optional(),
   taxAmount: z.number().nonnegative().optional(),
@@ -109,6 +111,17 @@ export const createPurchaseOrderSchema = z.object({
   items: z.array(purchaseOrderItemSchema).min(1),
   deliveryStages: z.array(deliveryStageBaseSchema).optional(),
   additionalCosts: z.array(additionalCostBaseSchema).optional(),
+  attachments: z
+    .array(
+      z.object({
+        fileName: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(150),
+        sizeBytes: z.number().int().positive().max(4 * 1024 * 1024),
+        contentBase64: z.string().min(1).max(8_000_000),
+      }),
+    )
+    .max(5)
+    .optional(),
 });
 
 export const updatePurchaseOrderStatusSchema = z.object({

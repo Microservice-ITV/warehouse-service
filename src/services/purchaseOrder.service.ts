@@ -91,10 +91,32 @@ export class PurchaseOrderService {
         deliveryStages: { orderBy: { sequence: 'asc' } },
         additionalCosts: { orderBy: { createdAt: 'asc' } },
         costAdjustments: { orderBy: { createdAt: 'asc' } },
+        attachments: {
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            sizeBytes: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     if (!order) throw new NotFoundError('Purchase order not found');
-    return order;
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: order.warehouseId },
+      select: { id: true, name: true, code: true },
+    });
+    return { ...order, warehouse };
+  }
+
+  async getAttachment(orderId: string, attachmentId: string) {
+    const file = await prisma.purchaseOrderAttachment.findFirst({
+      where: { id: attachmentId, purchaseOrderId: orderId },
+    });
+    if (!file) throw new NotFoundError('Attachment not found');
+    return file;
   }
 
   async create(input: {
@@ -105,6 +127,8 @@ export class PurchaseOrderService {
     paymentTerms?: string | null;
     deliveryTerms?: string | null;
     notes?: string | null;
+    supplierContact?: string | null;
+    orderDate?: string | null;
     expectedAt?: string | null;
     discountAmount?: number;
     taxAmount?: number;
@@ -113,6 +137,12 @@ export class PurchaseOrderService {
     items: PurchaseOrderItemInput[];
     deliveryStages?: PurchaseDeliveryStageInput[];
     additionalCosts?: PurchaseAdditionalCostInput[];
+    attachments?: Array<{
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      contentBase64: string;
+    }>;
   }) {
     const supplier = await prisma.supplier.findUnique({ where: { id: input.supplierId } });
     if (!supplier) throw new NotFoundError('Supplier not found');
@@ -141,8 +171,6 @@ export class PurchaseOrderService {
     const discountAmount = round2(input.discountAmount ?? 0);
     const taxAmount = round2(input.taxAmount ?? 0);
     const shippingAmount = round2(input.shippingAmount ?? 0);
-    const totalAmount = round2(subtotal - discountAmount + taxAmount + shippingAmount);
-
     const deliveryStages = (input.deliveryStages ?? []).map((stage, index) => ({
       sequence: stage.sequence ?? index + 1,
       name: stage.name,
@@ -165,6 +193,15 @@ export class PurchaseOrderService {
       notes: cost.notes ?? null,
     }));
 
+    const additionalTotal = round2(additionalCosts.reduce((sum, cost) => sum + cost.amount, 0));
+    const totalAmount = round2(subtotal - discountAmount + taxAmount + shippingAmount + additionalTotal);
+    const attachments = (input.attachments ?? []).map((file) => ({
+      fileName: file.fileName,
+      mimeType: file.mimeType || 'application/octet-stream',
+      sizeBytes: file.sizeBytes,
+      content: Buffer.from(file.contentBase64, 'base64'),
+    }));
+
     return prisma.purchaseOrder.create({
       data: {
         orderNumber: generateDocumentNumber('PO'),
@@ -175,6 +212,8 @@ export class PurchaseOrderService {
         paymentTerms: input.paymentTerms ?? supplier.paymentTerms ?? null,
         deliveryTerms: input.deliveryTerms ?? null,
         notes: input.notes ?? null,
+        supplierContact: input.supplierContact ?? null,
+        orderDate: input.orderDate ? new Date(input.orderDate) : null,
         expectedAt: input.expectedAt ? new Date(input.expectedAt) : null,
         subtotal,
         discountAmount,
@@ -185,6 +224,7 @@ export class PurchaseOrderService {
         items: { create: items },
         ...(deliveryStages.length > 0 ? { deliveryStages: { create: deliveryStages } } : {}),
         ...(additionalCosts.length > 0 ? { additionalCosts: { create: additionalCosts } } : {}),
+        ...(attachments.length > 0 ? { attachments: { create: attachments } } : {}),
         statusHistory: {
           create: { status: 'DRAFT', changedBy: input.createdBy ?? null },
         },
@@ -194,6 +234,15 @@ export class PurchaseOrderService {
         statusHistory: true,
         deliveryStages: { orderBy: { sequence: 'asc' } },
         additionalCosts: true,
+        attachments: {
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            sizeBytes: true,
+            createdAt: true,
+          },
+        },
       },
     });
   }
