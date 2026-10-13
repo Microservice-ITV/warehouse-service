@@ -16,6 +16,7 @@ export type PurchaseReceiptItemInput = {
   unitCost: number;
   batchNumber?: string | null;
   expiryAt?: string | null;
+  supplierId?: string | null;
 };
 
 export class PurchaseReceiptService {

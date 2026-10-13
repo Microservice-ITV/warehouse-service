@@ -63,7 +63,7 @@ export const startPurchaseGoodsReceivedConsumer = async () => {
           receiptId: payload.data.receipt_id,
           receiptNumber: payload.data.receipt_number,
           warehouseId: payload.data.warehouse_id,
-          supplierId: payload.data.supplier_id,
+          supplierId: payload.data.supplier_id ?? undefined,
           items: payload.data.items.map((item) => ({
             productId: item.product_id,
             variantId: item.variant_id,
