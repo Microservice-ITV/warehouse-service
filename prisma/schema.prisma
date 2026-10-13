@@ -12,14 +12,17 @@ model Warehouse {
   name      String
   address   String?
   status    WarehouseStatus @default(ACTIVE)
-  /// User id of the seller who created this warehouse. Null rows are admin-only.
+  /// Warehouse manager assigned to this warehouse.
   createdBy String?
+  /// Seller who created the warehouse and orders stock into it.
+  sellerUserId String? @map("seller_user_id")
 
   stocks    InventoryStock[]
   movements InventoryMovement[]
 
   @@index([status])
   @@index([createdBy])
+  @@index([sellerUserId])
   @@map("warehouses")
 }
 
@@ -140,7 +143,8 @@ model ProcessedEvent {
 
 model WarehouseTransfer {
   id              String         @id @default(uuid())
-  fromWarehouseId String         @map("from_warehouse_id")
+  fromWarehouseId String?        @map("from_warehouse_id")
+  fromSellerUserId String?       @map("from_seller_user_id")
   toWarehouseId   String         @map("to_warehouse_id")
   productId       String         @map("product_id")
   variantId       String         @default("") @map("variant_id")
@@ -149,6 +153,7 @@ model WarehouseTransfer {
   referenceId     String?        @map("reference_id")
   referenceType   String?        @map("reference_type")
   requestedBy     String?        @map("requested_by")
+  approvalSellerUserId String?   @map("approval_seller_user_id")
   decidedBy       String?        @map("decided_by")
   decidedAt       DateTime?      @map("decided_at")
   note            String?
@@ -158,7 +163,23 @@ model WarehouseTransfer {
   @@index([status, createdAt])
   @@index([fromWarehouseId])
   @@index([toWarehouseId])
+  @@index([approvalSellerUserId])
   @@map("warehouse_transfers")
+}
+
+/// Stock a seller received by ordering from a warehouse.
+model SellerStock {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  productId    String   @map("product_id")
+  variantId    String   @default("") @map("variant_id")
+  onHandQty    Int      @default(0) @map("on_hand_qty")
+  availableQty Int      @default(0) @map("available_qty")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, productId, variantId])
+  @@index([userId])
+  @@map("seller_stocks")
 }
 
 model ProductSnapshot {
@@ -203,6 +224,8 @@ enum MovementType {
 
 enum TransferStatus {
   PENDING
+  SELLER_APPROVED
+  AWAITING_RECEIPT
   APPROVED
   REJECTED
 }
@@ -245,7 +268,7 @@ model Supplier {
 model PurchaseOrder {
   id             String              @id @default(uuid())
   orderNumber    String              @unique @map("order_number")
-  supplierId     String              @map("supplier_id")
+  supplierId     String?             @map("supplier_id")
   warehouseId    String              @map("warehouse_id")
   status         PurchaseOrderStatus @default(DRAFT)
   currency       String              @default("USD")
@@ -265,10 +288,13 @@ model PurchaseOrder {
   shippingAmount Decimal             @default(0) @db.Decimal(14, 2) @map("shipping_amount")
   totalAmount    Decimal             @db.Decimal(14, 2) @map("total_amount")
   createdBy      String?             @map("created_by")
+  /// WAREHOUSE: seller is taking stock already in the warehouse.
+  /// SUPPLIER: seller is buying from a supplier so the warehouse can be restocked.
+  orderKind      PurchaseOrderKind   @default(SUPPLIER) @map("order_kind")
   createdAt      DateTime            @default(now()) @map("created_at")
   updatedAt      DateTime            @updatedAt @map("updated_at")
 
-  supplier        Supplier                     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplier        Supplier?                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   items           PurchaseOrderItem[]
   receipts        PurchaseReceipt[]
   returns         PurchaseReturn[]
@@ -507,6 +533,14 @@ enum PurchaseOrderStatus {
   RECEIVED
   CLOSED
   CANCELLED
+  LOW_STOCK
+  RESTOCK_REQUESTED
+  RESTOCK_APPROVED
+}
+
+enum PurchaseOrderKind {
+  WAREHOUSE
+  SUPPLIER
 }
 
 enum PurchaseReceiptStatus {

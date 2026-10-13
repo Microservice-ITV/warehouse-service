@@ -2,11 +2,14 @@ import type {
   AdditionalCostCategory,
   CostAllocationMethod,
   CostStatus,
+  Prisma,
   PurchaseCostAdjustmentType,
   PurchaseOrderStatus,
 } from '@prisma/client';
 import prisma from '@/config/database';
+import { InventoryService } from '@/services/inventory.service';
 import { NotFoundError, ValidationError } from '@/utils/errors';
+import { warehouseWhere } from '@/utils/warehouseAccess';
 
 export const round2 = (value: number) => Number(value.toFixed(2));
 
@@ -62,17 +65,21 @@ export type PurchaseCostAdjustmentInput = {
 };
 
 export class PurchaseOrderService {
+  private readonly inventoryService = new InventoryService();
   async list(params: {
     status?: PurchaseOrderStatus;
     supplierId?: string;
     warehouseId?: string;
+    warehouseIds?: string[];
+    createdByIds?: string[];
     limit?: number;
   } = {}) {
     return prisma.purchaseOrder.findMany({
       where: {
         ...(params.status ? { status: params.status } : {}),
         ...(params.supplierId ? { supplierId: params.supplierId } : {}),
-        ...(params.warehouseId ? { warehouseId: params.warehouseId } : {}),
+        ...warehouseWhere(params.warehouseId, params.warehouseIds),
+        ...(params.createdByIds ? { createdBy: { in: params.createdByIds } } : {}),
       },
       include: { items: true, supplier: true },
       orderBy: { createdAt: 'desc' },
@@ -120,7 +127,7 @@ export class PurchaseOrderService {
   }
 
   async create(input: {
-    supplierId: string;
+    supplierId?: string;
     warehouseId: string;
     currency?: string;
     exchangeRate?: number;
@@ -134,6 +141,8 @@ export class PurchaseOrderService {
     taxAmount?: number;
     shippingAmount?: number;
     createdBy?: string | null;
+    orderKind?: 'WAREHOUSE' | 'SUPPLIER';
+    asDraft?: boolean;
     items: PurchaseOrderItemInput[];
     deliveryStages?: PurchaseDeliveryStageInput[];
     additionalCosts?: PurchaseAdditionalCostInput[];
@@ -144,8 +153,14 @@ export class PurchaseOrderService {
       contentBase64: string;
     }>;
   }) {
-    const supplier = await prisma.supplier.findUnique({ where: { id: input.supplierId } });
-    if (!supplier) throw new NotFoundError('Supplier not found');
+    const kind = input.orderKind ?? 'SUPPLIER';
+    if (kind === 'SUPPLIER' && !input.supplierId) {
+      throw new ValidationError('Select a supplier.');
+    }
+    const supplier = input.supplierId
+      ? await prisma.supplier.findUnique({ where: { id: input.supplierId } })
+      : null;
+    if (kind === 'SUPPLIER' && !supplier) throw new NotFoundError('Supplier not found');
     if (input.items.length === 0) throw new ValidationError('At least one item is required');
 
     const items = input.items.map((item) => {
@@ -202,48 +217,126 @@ export class PurchaseOrderService {
       content: Buffer.from(file.contentBase64, 'base64'),
     }));
 
-    return prisma.purchaseOrder.create({
-      data: {
-        orderNumber: generateDocumentNumber('PO'),
-        supplierId: input.supplierId,
-        warehouseId: input.warehouseId,
-        currency: input.currency ?? 'USD',
-        exchangeRate: input.exchangeRate ?? 1,
-        paymentTerms: input.paymentTerms ?? supplier.paymentTerms ?? null,
-        deliveryTerms: input.deliveryTerms ?? null,
-        notes: input.notes ?? null,
-        supplierContact: input.supplierContact ?? null,
-        orderDate: input.orderDate ? new Date(input.orderDate) : null,
-        expectedAt: input.expectedAt ? new Date(input.expectedAt) : null,
-        subtotal,
-        discountAmount,
-        taxAmount,
-        shippingAmount,
-        totalAmount,
-        createdBy: input.createdBy ?? null,
-        items: { create: items },
-        ...(deliveryStages.length > 0 ? { deliveryStages: { create: deliveryStages } } : {}),
-        ...(additionalCosts.length > 0 ? { additionalCosts: { create: additionalCosts } } : {}),
-        ...(attachments.length > 0 ? { attachments: { create: attachments } } : {}),
-        statusHistory: {
-          create: { status: 'DRAFT', changedBy: input.createdBy ?? null },
-        },
-      },
-      include: {
-        items: true,
-        statusHistory: true,
-        deliveryStages: { orderBy: { sequence: 'asc' } },
-        additionalCosts: true,
-        attachments: {
-          select: {
-            id: true,
-            fileName: true,
-            mimeType: true,
-            sizeBytes: true,
-            createdAt: true,
+    const shortage =
+      kind === 'WAREHOUSE'
+        ? await this.shortageNote(
+            input.warehouseId,
+            items.map((item) => ({
+              productId: item.productId,
+              productName: item.productName,
+              quantity: item.quantity,
+            })),
+          )
+        : null;
+    const initialStatus = input.asDraft
+      ? 'DRAFT'
+      : kind === 'SUPPLIER'
+        ? 'ORDERED'
+        : shortage
+          ? 'LOW_STOCK'
+          : 'PENDING_APPROVAL';
+    const historyNote = input.asDraft
+      ? null
+      : kind === 'SUPPLIER'
+        ? 'Waiting for the warehouse manager to receive the products.'
+        : shortage;
+
+    return prisma.$transaction(async (tx) => {
+      const order = await tx.purchaseOrder.create({
+        data: {
+          orderNumber: generateDocumentNumber('PO'),
+          supplierId: input.supplierId ?? null,
+          warehouseId: input.warehouseId,
+          status: initialStatus,
+          currency: input.currency ?? 'USD',
+          exchangeRate: input.exchangeRate ?? 1,
+          paymentTerms: input.paymentTerms ?? supplier?.paymentTerms ?? null,
+          deliveryTerms: input.deliveryTerms ?? null,
+          notes: input.notes ?? null,
+          supplierContact: input.supplierContact ?? null,
+          orderDate: input.orderDate ? new Date(input.orderDate) : null,
+          expectedAt: input.expectedAt ? new Date(input.expectedAt) : null,
+          subtotal,
+          discountAmount,
+          taxAmount,
+          shippingAmount,
+          totalAmount,
+          createdBy: input.createdBy ?? null,
+          orderKind: kind,
+          items: { create: items },
+          ...(deliveryStages.length > 0 ? { deliveryStages: { create: deliveryStages } } : {}),
+          ...(additionalCosts.length > 0 ? { additionalCosts: { create: additionalCosts } } : {}),
+          ...(attachments.length > 0 ? { attachments: { create: attachments } } : {}),
+          statusHistory: {
+            create: {
+              status: initialStatus,
+              note: historyNote,
+              changedBy: input.createdBy ?? null,
+            },
           },
         },
-      },
+        include: {
+          items: true,
+          statusHistory: true,
+          deliveryStages: { orderBy: { sequence: 'asc' } },
+          additionalCosts: true,
+          attachments: {
+            select: {
+              id: true,
+              fileName: true,
+              mimeType: true,
+              sizeBytes: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+
+      return order;
+    });
+  }
+
+  async receiveSupplierStock(id: string, changedBy?: string | null) {
+    const order = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundError('Purchase order not found');
+    if (order.orderKind !== 'SUPPLIER') {
+      throw new ValidationError('Only a supplier order is received into the warehouse this way');
+    }
+    if (order.status !== 'ORDERED') {
+      throw new ValidationError('This supplier order is not waiting to be received');
+    }
+
+    return prisma.$transaction(async (tx) => {
+      await this.inventoryService.applyGoodsReceiptInTx(tx, {
+        receiptId: order.id,
+        warehouseId: order.warehouseId,
+        items: order.items.map((item) => ({
+          productId: item.productId,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          unitCost: Number(item.unitCost),
+        })),
+      });
+      const updated = await tx.purchaseOrder.update({
+        where: { id },
+        data: { status: 'RECEIVED' },
+      });
+      await tx.purchaseOrderStatusHistory.create({
+        data: {
+          purchaseOrderId: id,
+          status: 'RECEIVED',
+          note: 'Warehouse manager received the supplier products.',
+          changedBy: changedBy ?? null,
+        },
+      });
+      await this.reopenCoveredWarehouseRequests(tx, {
+        warehouseId: order.warehouseId,
+        createdBy: order.createdBy,
+      });
+      return updated;
     });
   }
 
@@ -253,7 +346,7 @@ export class PurchaseOrderService {
   ) {
     const order = await prisma.purchaseOrder.findUnique({
       where: { id },
-      include: { receipts: true },
+      include: { receipts: true, items: true },
     });
     if (!order) throw new NotFoundError('Purchase order not found');
     if (order.status === 'CANCELLED') {
@@ -262,25 +355,123 @@ export class PurchaseOrderService {
     if (input.status === 'CANCELLED' && order.receipts.length > 0) {
       throw new ValidationError('Cannot cancel a purchase order that has receipts');
     }
+    if (
+      input.status === 'RESTOCK_REQUESTED' &&
+      !['LOW_STOCK', 'PENDING_APPROVAL', 'PENDING'].includes(order.status)
+    ) {
+      throw new ValidationError('A restock request is only for an order the warehouse cannot fill');
+    }
+    if (input.status === 'RESTOCK_APPROVED' && order.status !== 'RESTOCK_REQUESTED') {
+      throw new ValidationError('Approve the warehouse manager’s restock request first');
+    }
+
+    let nextStatus = input.status;
+    let note = input.note;
+    const checksWarehouse =
+      order.orderKind === 'WAREHOUSE' &&
+      (input.status === 'PENDING_APPROVAL' ||
+        input.status === 'APPROVED' ||
+        input.status === 'ORDERED');
+    if (checksWarehouse) {
+      const shortage = await this.shortageNote(order.warehouseId, order.items);
+      if (shortage) {
+        nextStatus = 'LOW_STOCK';
+        note = shortage;
+      }
+    }
 
     return prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.update({
         where: { id },
         data: {
-          status: input.status,
-          ...(input.status === 'ORDERED' ? { orderedAt: new Date() } : {}),
+          status: nextStatus,
+          ...(nextStatus === 'ORDERED' ? { orderedAt: new Date() } : {}),
         },
       });
       await tx.purchaseOrderStatusHistory.create({
         data: {
           purchaseOrderId: id,
-          status: input.status,
-          note: input.note ?? null,
+          status: nextStatus,
+          note: note ?? null,
           changedBy: input.changedBy ?? null,
         },
       });
       return updated;
     });
+  }
+
+  /**
+   * A supplier receipt stocks the warehouse. The seller's earlier warehouse
+   * request can then be approved again, instead of placing a new warehouse order.
+   */
+  private async reopenCoveredWarehouseRequests(
+    tx: Prisma.TransactionClient,
+    input: { warehouseId: string; createdBy?: string | null },
+  ) {
+    const waiting = await tx.purchaseOrder.findMany({
+      where: {
+        warehouseId: input.warehouseId,
+        orderKind: 'WAREHOUSE',
+        status: { in: ['LOW_STOCK', 'RESTOCK_REQUESTED', 'RESTOCK_APPROVED'] },
+        ...(input.createdBy ? { createdBy: input.createdBy } : {}),
+      },
+      include: { items: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const reserved = new Map<string, number>();
+    for (const order of waiting) {
+      const needed = new Map<string, number>();
+      let covered = true;
+      for (const item of order.items) {
+        needed.set(item.productId, (needed.get(item.productId) ?? 0) + item.quantity);
+      }
+      for (const [productId, quantity] of needed) {
+        const available = await this.inventoryService.availableQty(input.warehouseId, productId, tx);
+        const alreadyReserved = reserved.get(productId) ?? 0;
+        if (available - alreadyReserved < quantity) {
+          covered = false;
+          break;
+        }
+      }
+      if (!covered) continue;
+      for (const [productId, quantity] of needed) {
+        reserved.set(productId, (reserved.get(productId) ?? 0) + quantity);
+      }
+      await tx.purchaseOrder.update({
+        where: { id: order.id },
+        data: { status: 'PENDING_APPROVAL' },
+      });
+      await tx.purchaseOrderStatusHistory.create({
+        data: {
+          purchaseOrderId: order.id,
+          status: 'PENDING_APPROVAL',
+          note: 'Stock is in the warehouse. The warehouse manager can approve this request.',
+          changedBy: input.createdBy ?? null,
+        },
+      });
+    }
+  }
+
+  private async shortageNote(
+    warehouseId: string,
+    items: Array<{ productId: string; productName: string | null; quantity: number }>,
+  ): Promise<string | null> {
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { name: true },
+    });
+    const warehouseName = warehouse?.name ?? 'this warehouse';
+    const lines: string[] = [];
+    for (const item of items) {
+      const available = await this.inventoryService.availableQty(warehouseId, item.productId);
+      if (available < item.quantity) {
+        const label = item.productName?.trim() || 'A product';
+        lines.push(
+          `${label}: available ${available}, requested ${item.quantity} in ${warehouseName}.`,
+        );
+      }
+    }
+    return lines.length > 0 ? lines.join(' ') : null;
   }
 
   // --- Delivery stages -------------------------------------------------------

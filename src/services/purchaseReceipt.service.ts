@@ -1,6 +1,7 @@
 import prisma from '@/config/database';
 import type { PurchaseReceiptStatus } from '@prisma/client';
 import { NotFoundError, ValidationError } from '@/utils/errors';
+import { warehouseWhere } from '@/utils/warehouseAccess';
 import { EventsPublisher } from '@/publishers/events.publisher';
 import { InventoryService } from '@/services/inventory.service';
 import { generateDocumentNumber, round2 } from '@/services/purchaseOrder.service';
@@ -24,13 +25,14 @@ export class PurchaseReceiptService {
   async list(params: {
     purchaseOrderId?: string;
     warehouseId?: string;
+    warehouseIds?: string[];
     status?: PurchaseReceiptStatus;
     limit?: number;
   } = {}) {
     return prisma.purchaseReceipt.findMany({
       where: {
         ...(params.purchaseOrderId ? { purchaseOrderId: params.purchaseOrderId } : {}),
-        ...(params.warehouseId ? { warehouseId: params.warehouseId } : {}),
+        ...warehouseWhere(params.warehouseId, params.warehouseIds),
         ...(params.status ? { status: params.status } : {}),
       },
       include: { items: true },
@@ -59,6 +61,9 @@ export class PurchaseReceiptService {
       where: { id: input.purchaseOrderId },
     });
     if (!order) throw new NotFoundError('Purchase order not found');
+    if (order.orderKind === 'SUPPLIER') {
+      throw new ValidationError('Receive supplier products from Receive from Supplier');
+    }
     if (order.status !== 'ORDERED' && order.status !== 'PARTIALLY_RECEIVED') {
       throw new ValidationError('Goods can be received only after the purchase order is ordered');
     }
@@ -144,16 +149,40 @@ export class PurchaseReceiptService {
         include: { items: true },
       });
 
-      await this.inventoryService.applyGoodsReceiptInTx(tx, {
-        receiptId: receipt.id,
-        warehouseId: receipt.warehouseId,
-        items: effectiveItems.map((item) => ({
-          productId: item.productId,
-          variantId: item.variantId || undefined,
-          quantity: item.effectiveQty,
-          unitCost: Number(item.unitCost),
-        })),
-      });
+      const receivedItems = effectiveItems.map((item) => ({
+        productId: item.productId,
+        variantId: item.variantId || undefined,
+        quantity: item.effectiveQty,
+        unitCost: Number(item.unitCost),
+      }));
+
+      if (receipt.purchaseOrder.orderKind === 'WAREHOUSE') {
+        if (!receipt.purchaseOrder.createdBy) {
+          throw new ValidationError('This order has no seller');
+        }
+        for (const item of receivedItems) {
+          if (item.quantity <= 0) continue;
+          await this.inventoryService.issueSale(tx, {
+            warehouseId: receipt.warehouseId,
+            productId: item.productId,
+            quantity: item.quantity,
+            referenceId: receipt.id,
+            createdBy: receipt.createdBy,
+          });
+          await this.inventoryService.creditSellerStock(tx, {
+            userId: receipt.purchaseOrder.createdBy,
+            productId: item.productId,
+            variantId: item.variantId,
+            quantity: item.quantity,
+          });
+        }
+      } else {
+        await this.inventoryService.applyGoodsReceiptInTx(tx, {
+          receiptId: receipt.id,
+          warehouseId: receipt.warehouseId,
+          items: receivedItems,
+        });
+      }
 
       await this.publisher.publishPurchaseGoodsReceived({
         db: tx,

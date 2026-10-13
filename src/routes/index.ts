@@ -13,8 +13,10 @@ import {
   increaseStock,
   listTransfers,
   receiveStock,
+  receiveTransfer,
   rejectTransfer,
   requestTransfer,
+  listSellerStock,
   validateProductStock,
 } from '@/controllers/inventory.controller';
 import {
@@ -36,6 +38,7 @@ import {
   listCostAdjustments,
   listDeliveryStages,
   listPurchaseOrders,
+  receiveSupplierOrder,
   updatePurchaseOrderStatus,
 } from '@/controllers/purchaseOrder.controller';
 import {
@@ -103,6 +106,7 @@ router.get(
   asyncHandler(downloadPurchaseOrderAttachment),
 );
 router.patch('/purchase-orders/:id/status', authOrService, validate(updatePurchaseOrderStatusSchema), asyncHandler(updatePurchaseOrderStatus));
+router.post('/purchase-orders/:id/receive-supplier', authOrService, asyncHandler(receiveSupplierOrder));
 
 router.get('/purchase-orders/:id/delivery-stages', authOrService, asyncHandler(listDeliveryStages));
 router.post('/purchase-orders/:id/delivery-stages', authOrService, validate(createDeliveryStageSchema), asyncHandler(createDeliveryStage));
@@ -123,9 +127,11 @@ router.get('/purchase-returns/:id', authOrService, asyncHandler(getPurchaseRetur
 router.post('/purchase-returns/:id/post', authOrService, asyncHandler(postPurchaseReturn));
 
 router.post('/inventory/increase', authOrService, validate(increaseStockSchema), asyncHandler(increaseStock));
+router.get('/inventory/seller', authOrService, asyncHandler(listSellerStock));
 router.post('/inventory/transfer', authOrService, validate(transferStockSchema), asyncHandler(requestTransfer));
 router.get('/inventory/transfers', authOrService, asyncHandler(listTransfers));
 router.post('/inventory/transfers/:id/approve', authOrService, validate(transferDecisionSchema), asyncHandler(approveTransfer));
+router.post('/inventory/transfers/:id/receive', authOrService, validate(transferDecisionSchema), asyncHandler(receiveTransfer));
 router.post('/inventory/transfers/:id/reject', authOrService, validate(transferDecisionSchema), asyncHandler(rejectTransfer));
 router.post('/inventory/receive', authOrService, validate(receiveStockSchema), asyncHandler(receiveStock));
 router.get('/inventory/movements', authOrService, asyncHandler(getStockMovements));

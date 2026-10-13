@@ -10,6 +10,9 @@ const ORDER_STATUSES = [
   'RECEIVED',
   'CLOSED',
   'CANCELLED',
+  'LOW_STOCK',
+  'RESTOCK_REQUESTED',
+  'RESTOCK_APPROVED',
 ] as const;
 
 const RECEIPT_STATUSES = ['DRAFT', 'POSTED', 'CANCELLED'] as const;
@@ -95,8 +98,10 @@ const additionalCostBaseSchema = z.object({
 });
 
 export const createPurchaseOrderSchema = z.object({
-  supplierId: z.string().uuid(),
+  supplierId: z.string().uuid().nullable().optional(),
   warehouseId: z.string().uuid(),
+  orderKind: z.enum(['WAREHOUSE', 'SUPPLIER']).optional(),
+  asDraft: z.boolean().optional(),
   currency: z.string().length(3).optional(),
   exchangeRate: z.number().positive().optional(),
   paymentTerms: z.string().max(120).nullable().optional(),

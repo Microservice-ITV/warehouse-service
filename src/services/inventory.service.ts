@@ -7,7 +7,7 @@ import { ProductSnapshotRepository } from '@/repositories/productSnapshot.reposi
 import { TransferRepository } from '@/repositories/transfer.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
 import { EventsPublisher } from '@/publishers/events.publisher';
-import { NotFoundError, ValidationError } from '@/utils/errors';
+import { AppError, NotFoundError, ValidationError } from '@/utils/errors';
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -27,6 +27,12 @@ export const withAvailability = (stock: InventoryStock) => ({
   ...stock,
   availability: toAvailabilityStatus(stock.availableQty),
 });
+
+/** all: admin and service calls. owner: warehouse manager. seller: shop user. */
+export type StockViewer =
+  | { kind: 'all' }
+  | { kind: 'owner'; userId: string }
+  | { kind: 'seller'; userId: string; userIds?: string[] };
 
 export class InventoryService {
   private readonly inventoryRepository = new InventoryRepository();
@@ -73,28 +79,326 @@ export class InventoryService {
     });
   }
 
-  async listWarehouseInventory(warehouseId: string) {
+  /** Posted receipts for purchase orders this seller created. */
+  async purchasedLines(userId: string | string[]): Promise<Array<{ warehouseId: string; productId: string }>> {
+    const ids = [...new Set((Array.isArray(userId) ? userId : [userId]).map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) return [];
+    const receipts = await prisma.purchaseReceipt.findMany({
+      where: {
+        status: 'POSTED',
+        purchaseOrder: { createdBy: { in: ids } },
+      },
+      select: {
+        warehouseId: true,
+        items: { select: { productId: true, acceptedQty: true, quantity: true } },
+      },
+    });
+    const seen = new Set<string>();
+    const lines: Array<{ warehouseId: string; productId: string }> = [];
+    for (const receipt of receipts) {
+      for (const item of receipt.items) {
+        const qty = item.acceptedQty ?? item.quantity;
+        if (qty <= 0) continue;
+        const key = `${receipt.warehouseId}:${item.productId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        lines.push({ warehouseId: receipt.warehouseId, productId: item.productId });
+      }
+    }
+    return lines;
+  }
+
+  async purchasedWarehouseIds(userId: string | string[]): Promise<string[]> {
+    const lines = await this.purchasedLines(userId);
+    return [...new Set(lines.map((line) => line.warehouseId))];
+  }
+
+  private async warehouseIdsForUsers(userIds: string[]): Promise<string[]> {
+    const lists = await Promise.all(
+      userIds.filter(Boolean).map((userId) => this.warehouseRepository.listIdsByCreatedBy(userId)),
+    );
+    return [...new Set(lists.flat())];
+  }
+
+  private sellerIdentity(viewer: StockViewer): string[] {
+    if (viewer.kind !== 'seller') return [];
+    return [...new Set([viewer.userId, ...(viewer.userIds ?? [])].map((id) => id.trim()).filter(Boolean))];
+  }
+
+  async listWarehouseInventory(warehouseId: string, viewer: StockViewer = { kind: 'all' }) {
     const warehouse = await this.warehouseRepository.findById(warehouseId);
     if (!warehouse) throw new NotFoundError('Warehouse not found');
     const stocks = await this.inventoryRepository.listByWarehouse(warehouseId);
-    return stocks.map(withAvailability);
+
+    if (viewer.kind === 'all') return stocks.map(withAvailability);
+
+    if (viewer.kind === 'owner') {
+      if (warehouse.createdBy !== viewer.userId) throw new NotFoundError('Warehouse not found');
+      return stocks.map(withAvailability);
+    }
+
+    const sellerIds = this.sellerIdentity(viewer);
+    if (warehouse.createdBy && sellerIds.includes(warehouse.createdBy)) {
+      return stocks.map(withAvailability);
+    }
+
+    const lines = await this.purchasedLines(sellerIds);
+    const productIds = new Set(
+      lines.filter((line) => line.warehouseId === warehouseId).map((line) => line.productId),
+    );
+    if (productIds.size === 0) throw new NotFoundError('Warehouse not found');
+    return stocks.filter((stock) => productIds.has(stock.productId)).map(withAvailability);
   }
 
-  async listMovements(input: {
-    productId?: string;
-    warehouseId?: string;
-    movementType?: MovementType;
-    limit?: number;
-  }) {
-    return this.movementRepository.list(input);
+  async listMovements(
+    input: {
+      productId?: string;
+      warehouseId?: string;
+      movementType?: MovementType;
+      limit?: number;
+    },
+    viewer: StockViewer = { kind: 'all' },
+  ) {
+    if (viewer.kind === 'all') return this.movementRepository.list(input);
+    if (viewer.kind === 'owner') {
+      const warehouseIds = await this.warehouseRepository.listIdsByCreatedBy(viewer.userId);
+      if (input.warehouseId && !warehouseIds.includes(input.warehouseId)) return [];
+      return this.movementRepository.list({
+        ...input,
+        warehouseIds: input.warehouseId ? undefined : warehouseIds,
+      });
+    }
+    const sellerIds = this.sellerIdentity(viewer);
+    const [ownedIds, lines] = await Promise.all([
+      this.warehouseIdsForUsers(sellerIds),
+      this.purchasedLines(sellerIds),
+    ]);
+    return this.movementRepository.list({
+      ...input,
+      or: [
+        ...ownedIds.map((warehouseId) => ({ warehouseId })),
+        ...lines.map((line) => ({ warehouseId: line.warehouseId, productId: line.productId })),
+      ],
+    });
   }
 
-  async listTransfers(input: {
-    warehouseId?: string;
-    status?: TransferStatus;
-    limit?: number;
-  }) {
-    return this.transferRepository.list(input);
+  async listTransfers(
+    input: {
+      warehouseId?: string;
+      status?: TransferStatus;
+      limit?: number;
+    },
+    viewer: StockViewer = { kind: 'all' },
+  ) {
+    if (viewer.kind === 'all') return this.transferRepository.list(input);
+    if (viewer.kind === 'owner') {
+      const ids = await this.warehouseRepository.listIdsByCreatedBy(viewer.userId);
+      if (input.status === 'PENDING') {
+        return this.transferRepository.list({ ...input, managerPendingIds: ids });
+      }
+      return this.transferRepository.list({ ...input, touchingWarehouseIds: ids });
+    }
+    const sellerIds = this.sellerIdentity(viewer);
+    if (input.status === 'PENDING') {
+      return this.transferRepository.list({ ...input, approvalSellerUserIds: sellerIds });
+    }
+    const owned = await this.warehouseIdsForUsers(sellerIds);
+    return this.transferRepository.list({
+      ...input,
+      sellerUserIds: sellerIds,
+      sellerWarehouseIds: owned,
+    });
+  }
+
+  async assertCanRequestTransfer(
+    input: { fromWarehouseId: string; productId: string },
+    viewer: StockViewer,
+  ) {
+    if (viewer.kind === 'all') return;
+    const warehouse = await this.warehouseRepository.findById(input.fromWarehouseId);
+    if (!warehouse) throw new NotFoundError('Source warehouse not found');
+    if (viewer.kind === 'owner') {
+      if (warehouse.createdBy !== viewer.userId) {
+        throw new AppError('You can only transfer stock from your own warehouse', 403, 'FORBIDDEN');
+      }
+      return;
+    }
+    const sellerIds = this.sellerIdentity(viewer);
+    if (warehouse.sellerUserId && sellerIds.includes(warehouse.sellerUserId)) return;
+    if (warehouse.createdBy && sellerIds.includes(warehouse.createdBy)) return;
+    const lines = await this.purchasedLines(sellerIds);
+    const allowed = lines.some(
+      (line) => line.warehouseId === input.fromWarehouseId && line.productId === input.productId,
+    );
+    if (!allowed) {
+      throw new AppError('You can only transfer products from your purchases', 403, 'FORBIDDEN');
+    }
+  }
+
+  async assertCanDecideTransfer(transferId: string, viewer: StockViewer) {
+    if (viewer.kind === 'all') return;
+    const transfer = await this.transferRepository.findById(transferId);
+    if (!transfer) throw new NotFoundError('Transfer not found');
+
+    if (transfer.approvalSellerUserId && !transfer.fromSellerUserId && transfer.status === 'PENDING') {
+      const sellerIds = viewer.kind === 'seller' ? this.sellerIdentity(viewer) : [];
+      if (!sellerIds.includes(transfer.approvalSellerUserId)) {
+        throw new AppError('Only the seller can approve or reject this transfer request', 403, 'FORBIDDEN');
+      }
+      return;
+    }
+
+    if (transfer.status === 'SELLER_APPROVED') {
+      if (viewer.kind !== 'owner') {
+        throw new AppError('Only the warehouse manager can complete this transfer', 403, 'FORBIDDEN');
+      }
+      const warehouse = await this.warehouseRepository.findById(transfer.fromWarehouseId ?? '');
+      if (!warehouse || warehouse.createdBy !== viewer.userId) {
+        throw new AppError('Only the source warehouse manager can complete this transfer', 403, 'FORBIDDEN');
+      }
+      return;
+    }
+
+    if (viewer.kind !== 'owner') {
+      throw new AppError(
+        'Only the destination warehouse manager can approve or reject this transfer',
+        403,
+        'FORBIDDEN',
+      );
+    }
+    if (transfer.fromSellerUserId) {
+      const destination = await this.warehouseRepository.findById(transfer.toWarehouseId);
+      if (!destination || destination.createdBy !== viewer.userId) {
+        throw new AppError(
+          'Only the destination warehouse manager can approve or reject this transfer',
+          403,
+          'FORBIDDEN',
+        );
+      }
+      return;
+    }
+    throw new AppError('This transfer is waiting for the seller', 403, 'FORBIDDEN');
+  }
+
+  async availableQty(
+    warehouseId: string,
+    productId: string,
+    db?: Prisma.TransactionClient,
+  ): Promise<number> {
+    const rows = await this.inventoryRepository.listByProductInWarehouse(warehouseId, productId, db);
+    return rows.reduce((sum, row) => sum + this.movableQty(row), 0);
+  }
+
+  /** Takes stock already in the warehouse for a seller warehouse order. */
+  async issueSale(
+    tx: Prisma.TransactionClient,
+    input: {
+      warehouseId: string;
+      productId: string;
+      quantity: number;
+      referenceId: string;
+      createdBy?: string | null;
+    },
+  ) {
+    const rows = await this.inventoryRepository.listByProductInWarehouse(
+      input.warehouseId,
+      input.productId,
+      tx,
+    );
+    const ranked = [...rows].sort((a, b) => this.movableQty(b) - this.movableQty(a));
+    let remaining = input.quantity;
+
+    for (const row of ranked) {
+      if (remaining <= 0) break;
+      const movable = this.movableQty(row);
+      if (movable <= 0) continue;
+      const take = Math.min(movable, remaining);
+      const moved = await this.applyDelta(tx, {
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        variantId: row.variantId,
+        delta: -take,
+        minAvailable: take,
+        errorMessage: 'Not enough stock',
+      });
+      await this.movementRepository.create({
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        variantId: row.variantId,
+        movementType: 'SALE_ISSUED',
+        quantity: moved.afterQty - moved.beforeQty,
+        beforeQty: moved.beforeQty,
+        afterQty: moved.afterQty,
+        referenceType: 'PURCHASE_ORDER',
+        referenceId: input.referenceId,
+        createdBy: input.createdBy ?? null,
+        db: tx,
+      });
+      remaining -= take;
+    }
+
+    if (remaining > 0) {
+      throw new ValidationError('Not enough stock');
+    }
+  }
+
+  async listSellerStock(userId: string) {
+    if (!userId) return [];
+    return prisma.sellerStock.findMany({
+      where: { userId, availableQty: { gt: 0 } },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async creditSellerStock(
+    tx: Prisma.TransactionClient,
+    input: { userId: string; productId: string; variantId?: string; quantity: number },
+  ) {
+    const variantId = input.variantId ?? '';
+    const existing = await tx.sellerStock.findUnique({
+      where: { userId_productId_variantId: { userId: input.userId, productId: input.productId, variantId } },
+    });
+    if (!existing) {
+      return tx.sellerStock.create({
+        data: {
+          userId: input.userId,
+          productId: input.productId,
+          variantId,
+          onHandQty: input.quantity,
+          availableQty: input.quantity,
+        },
+      });
+    }
+    return tx.sellerStock.update({
+      where: { id: existing.id },
+      data: {
+        onHandQty: { increment: input.quantity },
+        availableQty: { increment: input.quantity },
+      },
+    });
+  }
+
+  async debitSellerStock(
+    tx: Prisma.TransactionClient,
+    input: { userId: string; productId: string; variantId?: string; quantity: number },
+  ) {
+    const variantId = input.variantId ?? '';
+    const existing = await tx.sellerStock.findUnique({
+      where: { userId_productId_variantId: { userId: input.userId, productId: input.productId, variantId } },
+    });
+    const available = existing?.availableQty ?? 0;
+    if (!existing || available < input.quantity) {
+      throw new ValidationError(
+        `Not enough stock in your inventory. Available ${available}, requested ${input.quantity}.`,
+      );
+    }
+    return tx.sellerStock.update({
+      where: { id: existing.id },
+      data: {
+        onHandQty: { decrement: input.quantity },
+        availableQty: { decrement: input.quantity },
+      },
+    });
   }
 
   async increaseStock(input: {
@@ -166,6 +470,7 @@ export class InventoryService {
     referenceId: string;
     referenceType?: string;
     requestedBy?: string;
+    requesterIds?: string[];
   }) {
     if (input.quantity <= 0) throw new ValidationError('Quantity must be > 0');
     if (input.fromWarehouseId === input.toWarehouseId) {
@@ -179,6 +484,15 @@ export class InventoryService {
     if (!fromWarehouse) throw new NotFoundError('Source warehouse not found');
     if (!toWarehouse) throw new NotFoundError('Destination warehouse not found');
 
+    const approvalSellerUserId = await this.sellerForWarehouseProduct(
+      input.fromWarehouseId,
+      input.productId,
+    );
+    const requesterIds = new Set(
+      [input.requestedBy, ...(input.requesterIds ?? [])].filter((id): id is string => Boolean(id)),
+    );
+    const sellerRequested = requesterIds.has(approvalSellerUserId);
+
     return this.transferRepository.create({
       fromWarehouseId: input.fromWarehouseId,
       toWarehouseId: input.toWarehouseId,
@@ -188,6 +502,63 @@ export class InventoryService {
       referenceId: input.referenceId,
       referenceType: input.referenceType ?? 'TRANSFER',
       requestedBy: input.requestedBy,
+      approvalSellerUserId,
+      status: sellerRequested ? 'SELLER_APPROVED' : 'PENDING',
+    });
+  }
+
+  private async sellerForWarehouseProduct(warehouseId: string, productId: string) {
+    const warehouse = await this.warehouseRepository.findById(warehouseId);
+    if (warehouse?.sellerUserId) return warehouse.sellerUserId;
+
+    const orders = await prisma.purchaseOrder.findMany({
+      where: {
+        warehouseId,
+        orderKind: 'SUPPLIER',
+        createdBy: { not: null },
+        items: { some: { productId } },
+      },
+      select: { createdBy: true },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    const sellerId = orders.find((order) => order.createdBy)?.createdBy;
+    if (!sellerId) {
+      throw new ValidationError('No seller is linked to this product in the warehouse.');
+    }
+    return sellerId;
+  }
+
+  async requestSellerTransfer(input: {
+    fromSellerUserId: string;
+    toWarehouseId: string;
+    productId: string;
+    variantId?: string;
+    quantity: number;
+    referenceId: string;
+    requestedBy?: string;
+  }) {
+    if (input.quantity <= 0) throw new ValidationError('Quantity must be > 0');
+    const destination = await this.warehouseRepository.findById(input.toWarehouseId);
+    if (!destination) throw new NotFoundError('Destination warehouse not found');
+    const rows = await prisma.sellerStock.findMany({
+      where: { userId: input.fromSellerUserId, productId: input.productId },
+    });
+    const available = rows.reduce((sum, row) => sum + row.availableQty, 0);
+    if (available < input.quantity) {
+      throw new ValidationError(
+        `Not enough stock in your inventory. Available ${available}, requested ${input.quantity}.`,
+      );
+    }
+    return this.transferRepository.create({
+      fromSellerUserId: input.fromSellerUserId,
+      toWarehouseId: input.toWarehouseId,
+      productId: input.productId,
+      variantId: input.variantId,
+      quantity: input.quantity,
+      referenceId: input.referenceId,
+      referenceType: 'SELLER_TRANSFER',
+      requestedBy: input.requestedBy ?? input.fromSellerUserId,
     });
   }
 
@@ -212,10 +583,48 @@ export class InventoryService {
     return prisma.$transaction(async (tx) => {
       const transfer = await this.transferRepository.findById(input.transferId, tx);
       if (!transfer) throw new NotFoundError('Transfer not found');
-      if (transfer.status !== 'PENDING') {
+      if (transfer.status !== 'PENDING' && transfer.status !== 'SELLER_APPROVED') {
         throw new ValidationError(`Transfer is already ${transfer.status.toLowerCase()}`);
       }
 
+      if (
+        transfer.approvalSellerUserId &&
+        !transfer.fromSellerUserId &&
+        transfer.status === 'PENDING'
+      ) {
+        const updated = await this.transferRepository.decide(
+          transfer.id,
+          {
+            decidedBy: input.decidedBy,
+            note: input.note ?? 'Seller approved the transfer request.',
+            status: 'SELLER_APPROVED',
+          },
+          tx,
+        );
+        return { transfer: updated, fromWarehouse: null, toWarehouse: null };
+      }
+
+      if (transfer.approvalSellerUserId && !transfer.fromSellerUserId && transfer.status !== 'SELLER_APPROVED') {
+        throw new ValidationError('The seller must approve this transfer before it can be completed');
+      }
+
+      if (transfer.fromSellerUserId) {
+        if (transfer.status !== 'PENDING') {
+          throw new ValidationError(`Transfer is already ${transfer.status.toLowerCase()}`);
+        }
+        const updated = await this.transferRepository.decide(
+          transfer.id,
+          {
+            decidedBy: input.decidedBy,
+            note: input.note ?? 'Approved. Receive the products into the warehouse.',
+            status: 'AWAITING_RECEIPT',
+          },
+          tx,
+        );
+        return { transfer: updated, fromWarehouse: null, toWarehouse: null };
+      }
+
+      if (!transfer.fromWarehouseId) throw new NotFoundError('Source warehouse not found');
       const [fromWarehouse, toWarehouse] = await Promise.all([
         this.warehouseRepository.findById(transfer.fromWarehouseId, tx),
         this.warehouseRepository.findById(transfer.toWarehouseId, tx),
@@ -224,10 +633,13 @@ export class InventoryService {
       if (!toWarehouse) throw new NotFoundError('Destination warehouse not found');
 
       const referenceId = transfer.referenceId ?? transfer.id;
-      const plan = await this.planTransferDeductions(tx, transfer, fromWarehouse.name);
+      const plan = await this.planTransferDeductions(
+        tx,
+        { ...transfer, fromWarehouseId: transfer.fromWarehouseId },
+        fromWarehouse.name,
+      );
 
       let sourceStock: InventoryStock | null = null;
-      let destinationStock: InventoryStock | null = null;
 
       for (const step of plan) {
         const source = await this.applyDelta(tx, {
@@ -239,14 +651,6 @@ export class InventoryService {
           errorMessage: 'Not enough stock',
         });
         sourceStock = source.stock;
-
-        const destination = await this.applyDelta(tx, {
-          warehouseId: transfer.toWarehouseId,
-          productId: transfer.productId,
-          variantId: step.variantId,
-          delta: step.quantity,
-        });
-        destinationStock = destination.stock;
 
         await this.movementRepository.create({
           warehouseId: transfer.fromWarehouseId,
@@ -261,45 +665,21 @@ export class InventoryService {
           createdBy: input.decidedBy ?? transfer.requestedBy,
           db: tx,
         });
-
-        await this.movementRepository.create({
-          warehouseId: transfer.toWarehouseId,
-          productId: transfer.productId,
-          variantId: step.variantId,
-          movementType: 'TRANSFER_IN',
-          quantity: destination.afterQty - destination.beforeQty,
-          beforeQty: destination.beforeQty,
-          afterQty: destination.afterQty,
-          referenceType: transfer.referenceType ?? 'TRANSFER',
-          referenceId,
-          createdBy: input.decidedBy ?? transfer.requestedBy,
-          db: tx,
-        });
       }
 
-      const shopId = await this.publishStockChange(tx, {
+      await this.publishStockChange(tx, {
         productId: transfer.productId,
         warehouseId: transfer.fromWarehouseId,
         correlationId: referenceId,
         localAvailable: sourceStock?.availableQty ?? 0,
       });
-      if (shopId && destinationStock) {
-        await this.maybePublishLowStock({
-          warehouseId: transfer.toWarehouseId,
-          productId: transfer.productId,
-          shopId,
-          availableStock: destinationStock.availableQty,
-          correlationId: referenceId,
-          db: tx,
-        });
-      }
 
       const updated = await this.transferRepository.decide(
         transfer.id,
         {
           decidedBy: input.decidedBy,
-          note: input.note,
-          status: 'APPROVED',
+          note: input.note ?? 'Sent. The destination warehouse manager can receive the products.',
+          status: 'AWAITING_RECEIPT',
           variantId: plan.length === 1 ? plan[0].variantId : undefined,
         },
         tx
@@ -308,8 +688,104 @@ export class InventoryService {
       return {
         transfer: updated,
         fromWarehouse: withAvailability(sourceStock!),
-        toWarehouse: withAvailability(destinationStock!),
+        toWarehouse: null,
       };
+    });
+  }
+
+  async assertCanReceiveTransfer(transferId: string, viewer: StockViewer) {
+    if (viewer.kind === 'all') return;
+    const transfer = await this.transferRepository.findById(transferId);
+    if (!transfer) throw new NotFoundError('Transfer not found');
+    if (transfer.status !== 'AWAITING_RECEIPT') {
+      throw new ValidationError('This transfer is not waiting to be received');
+    }
+    if (viewer.kind !== 'owner') {
+      throw new AppError('Only the destination warehouse manager can receive this transfer', 403, 'FORBIDDEN');
+    }
+    const destination = await this.warehouseRepository.findById(transfer.toWarehouseId);
+    if (!destination || destination.createdBy !== viewer.userId) {
+      throw new AppError('Only the destination warehouse manager can receive this transfer', 403, 'FORBIDDEN');
+    }
+  }
+
+  async receiveTransfer(input: { transferId: string; decidedBy?: string; note?: string }) {
+    return prisma.$transaction(async (tx) => {
+      const transfer = await this.transferRepository.findById(input.transferId, tx);
+      if (!transfer) throw new NotFoundError('Transfer not found');
+      if (transfer.status !== 'AWAITING_RECEIPT') {
+        throw new ValidationError('This transfer is not waiting to be received');
+      }
+      const destination = await this.warehouseRepository.findById(transfer.toWarehouseId, tx);
+      if (!destination) throw new NotFoundError('Destination warehouse not found');
+      const referenceId = transfer.referenceId ?? transfer.id;
+
+      if (transfer.fromSellerUserId) {
+        await this.debitSellerStock(tx, {
+          userId: transfer.fromSellerUserId,
+          productId: transfer.productId,
+          variantId: transfer.variantId,
+          quantity: transfer.quantity,
+        });
+        const received = await this.applyDelta(tx, {
+          warehouseId: transfer.toWarehouseId,
+          productId: transfer.productId,
+          variantId: transfer.variantId,
+          delta: transfer.quantity,
+        });
+        await this.movementRepository.create({
+          warehouseId: transfer.toWarehouseId,
+          productId: transfer.productId,
+          variantId: transfer.variantId,
+          movementType: 'TRANSFER_IN',
+          quantity: received.afterQty - received.beforeQty,
+          beforeQty: received.beforeQty,
+          afterQty: received.afterQty,
+          referenceType: 'SELLER_TRANSFER',
+          referenceId,
+          createdBy: input.decidedBy ?? transfer.requestedBy,
+          db: tx,
+        });
+      } else {
+        const outs = await this.movementRepository.listByReference(referenceId, 'TRANSFER_OUT', tx);
+        if (outs.length === 0) {
+          throw new ValidationError('This transfer has not left the source warehouse');
+        }
+        for (const out of outs) {
+          const quantity = Math.abs(out.quantity);
+          if (quantity <= 0) continue;
+          const received = await this.applyDelta(tx, {
+            warehouseId: transfer.toWarehouseId,
+            productId: out.productId,
+            variantId: out.variantId,
+            delta: quantity,
+          });
+          await this.movementRepository.create({
+            warehouseId: transfer.toWarehouseId,
+            productId: out.productId,
+            variantId: out.variantId,
+            movementType: 'TRANSFER_IN',
+            quantity: received.afterQty - received.beforeQty,
+            beforeQty: received.beforeQty,
+            afterQty: received.afterQty,
+            referenceType: transfer.referenceType ?? 'TRANSFER',
+            referenceId,
+            createdBy: input.decidedBy ?? transfer.requestedBy,
+            db: tx,
+          });
+        }
+      }
+
+      const updated = await this.transferRepository.decide(
+        transfer.id,
+        {
+          decidedBy: input.decidedBy,
+          note: input.note ?? 'Destination warehouse received the products.',
+          status: 'APPROVED',
+        },
+        tx,
+      );
+      return { transfer: updated };
     });
   }
 

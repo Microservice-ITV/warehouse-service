@@ -38,6 +38,18 @@ export class MovementRepository {
     });
   }
 
+  async listByReference(
+    referenceId: string,
+    movementType: MovementType,
+    db?: Db,
+  ): Promise<InventoryMovement[]> {
+    const client = db ?? prisma;
+    return client.inventoryMovement.findMany({
+      where: { referenceId, movementType },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
   async countByReference(referenceId: string, db?: Db): Promise<number> {
     const client = db ?? prisma;
     return client.inventoryMovement.count({ where: { referenceId } });
@@ -46,15 +58,19 @@ export class MovementRepository {
   async list(params: {
     productId?: string;
     warehouseId?: string;
+    warehouseIds?: string[];
     movementType?: MovementType;
     limit?: number;
+    or?: Prisma.InventoryMovementWhereInput[];
   }): Promise<InventoryMovement[]> {
+    const and: Prisma.InventoryMovementWhereInput[] = [];
+    if (params.productId) and.push({ productId: params.productId });
+    if (params.warehouseId) and.push({ warehouseId: params.warehouseId });
+    if (params.warehouseIds) and.push({ warehouseId: { in: params.warehouseIds } });
+    if (params.movementType) and.push({ movementType: params.movementType });
+    if (params.or) and.push(params.or.length > 0 ? { OR: params.or } : { id: { in: [] } });
     return prisma.inventoryMovement.findMany({
-      where: {
-        ...(params.productId ? { productId: params.productId } : {}),
-        ...(params.warehouseId ? { warehouseId: params.warehouseId } : {}),
-        ...(params.movementType ? { movementType: params.movementType } : {}),
-      },
+      where: and.length > 0 ? { AND: and } : {},
       orderBy: { createdAt: 'desc' },
       take: params.limit ?? 100,
     });
