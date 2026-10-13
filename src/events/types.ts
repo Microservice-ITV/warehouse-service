@@ -125,7 +125,7 @@ export interface PurchaseGoodsReceivedData {
   receipt_number: string;
   purchase_order_id: string;
   warehouse_id: string;
-  supplier_id: string;
+  supplier_id: string | null;
   received_at: string;
   items: Array<{
     product_id: string;
