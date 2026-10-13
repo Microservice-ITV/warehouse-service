@@ -1,6 +1,7 @@
 import type { PurchaseReturnStatus } from '@prisma/client';
 import prisma from '@/config/database';
 import { NotFoundError, ValidationError } from '@/utils/errors';
+import { warehouseWhere } from '@/utils/warehouseAccess';
 import { EventsPublisher } from '@/publishers/events.publisher';
 import { InventoryService } from '@/services/inventory.service';
 import { generateDocumentNumber, round2 } from '@/services/purchaseOrder.service';
@@ -19,13 +20,14 @@ export class PurchaseReturnService {
   async list(params: {
     supplierId?: string;
     warehouseId?: string;
+    warehouseIds?: string[];
     status?: PurchaseReturnStatus;
     limit?: number;
   } = {}) {
     return prisma.purchaseReturn.findMany({
       where: {
         ...(params.supplierId ? { supplierId: params.supplierId } : {}),
-        ...(params.warehouseId ? { warehouseId: params.warehouseId } : {}),
+        ...warehouseWhere(params.warehouseId, params.warehouseIds),
         ...(params.status ? { status: params.status } : {}),
       },
       include: { items: true },

@@ -37,8 +37,9 @@ export const increaseStockSchema = z.object({
 });
 
 export const transferStockSchema = z.object({
-  fromWarehouseId: z.string().uuid(),
+  fromWarehouseId: z.string().uuid().optional(),
   toWarehouseId: z.string().uuid(),
+  fromSeller: z.boolean().optional(),
   productId: z.string().uuid(),
   variantId: z.string().max(64).optional(),
   ...actor,

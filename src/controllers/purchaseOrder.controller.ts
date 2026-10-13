@@ -1,24 +1,17 @@
 import type { Request, Response } from 'express';
 import { PurchaseOrderService } from '@/services/purchaseOrder.service';
 import { AppError, ValidationError } from '@/utils/errors';
+import {
+  assertOwnedWarehouse,
+  assertWarehouseManager,
+  isPlatformAdmin,
+  isWarehouseManager,
+  ownedWarehouseIds,
+  requestUserId,
+} from '@/utils/warehouseAccess';
 import { listPurchaseOrdersQuerySchema } from '@/validators/purchase.validators';
 
 const purchaseOrderService = new PurchaseOrderService();
-
-const PLATFORM_ADMIN_ROLES = new Set([
-  'super_admin',
-  'platform_super_admin',
-  'platform_finance',
-  'platform_director',
-  'platform_cfo',
-]);
-
-const isPlatformAdmin = (req: Request): boolean => {
-  const role = req.user && 'role' in req.user ? req.user.role : undefined;
-  if (typeof role !== 'string') return false;
-  const normalized = role.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  return PLATFORM_ADMIN_ROLES.has(normalized);
-};
 
 export const createPurchaseOrder = async (req: Request, res: Response) => {
   const order = await purchaseOrderService.create({
@@ -33,16 +26,29 @@ export const listPurchaseOrders = async (req: Request, res: Response) => {
   if (!parsed.success) {
     throw new ValidationError(parsed.error.errors.map((e) => e.message).join(', '));
   }
-  const data = await purchaseOrderService.list(parsed.data);
+  const warehouseIds = await ownedWarehouseIds(req);
+  const createdByIds =
+    req.user && !isPlatformAdmin(req) && !isWarehouseManager(req)
+      ? [
+          ...new Set(
+            [requestUserId(req), typeof req.user.sub === 'string' ? req.user.sub.trim() : '']
+              .filter((id): id is string => Boolean(id)),
+          ),
+        ]
+      : undefined;
+  const data = await purchaseOrderService.list({ ...parsed.data, warehouseIds, createdByIds });
   return res.status(200).json({ success: true, data });
 };
 
 export const getPurchaseOrder = async (req: Request, res: Response) => {
   const order = await purchaseOrderService.get(req.params.id);
+  assertOwnedWarehouse(order.warehouseId, await ownedWarehouseIds(req));
   return res.status(200).json({ success: true, data: order });
 };
 
 export const downloadPurchaseOrderAttachment = async (req: Request, res: Response) => {
+  const order = await purchaseOrderService.get(req.params.id);
+  assertOwnedWarehouse(order.warehouseId, await ownedWarehouseIds(req));
   const file = await purchaseOrderService.getAttachment(req.params.id, req.params.attachmentId);
   const fileName = file.fileName.replace(/["\r\n]/g, '');
   res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
@@ -51,15 +57,33 @@ export const downloadPurchaseOrderAttachment = async (req: Request, res: Respons
   return res.status(200).send(file.content);
 };
 
+export const receiveSupplierOrder = async (req: Request, res: Response) => {
+  assertWarehouseManager(req, 'Only a warehouse manager can receive supplier products');
+  const order = await purchaseOrderService.get(req.params.id);
+  assertOwnedWarehouse(order.warehouseId, await ownedWarehouseIds(req));
+  const data = await purchaseOrderService.receiveSupplierStock(req.params.id, req.user?.sub);
+  return res.status(200).json({ success: true, data });
+};
+
 export const updatePurchaseOrderStatus = async (req: Request, res: Response) => {
-  if (req.body.status === 'APPROVED' && req.user && !isPlatformAdmin(req)) {
-    throw new AppError('Only an admin can approve a purchase order', 403, 'FORBIDDEN');
+  if (req.body.status === 'APPROVED') {
+    assertWarehouseManager(req, 'Only a warehouse manager can approve a purchase order');
   }
-  const order = await purchaseOrderService.setStatus(req.params.id, {
+  if (req.body.status === 'RESTOCK_REQUESTED') {
+    assertWarehouseManager(req, 'Only a warehouse manager can request a restock');
+  }
+  if (req.body.status === 'RESTOCK_APPROVED') {
+    if (!req.user || isWarehouseManager(req) || isPlatformAdmin(req)) {
+      throw new AppError('Only the seller can approve a restock request', 403, 'FORBIDDEN');
+    }
+  }
+  const order = await purchaseOrderService.get(req.params.id);
+  assertOwnedWarehouse(order.warehouseId, await ownedWarehouseIds(req));
+  const updated = await purchaseOrderService.setStatus(req.params.id, {
     ...req.body,
     changedBy: req.user?.sub,
   });
-  return res.status(200).json({ success: true, data: order });
+  return res.status(200).json({ success: true, data: updated });
 };
 
 // --- Delivery stages ---------------------------------------------------------

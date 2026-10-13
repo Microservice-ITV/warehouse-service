@@ -1,33 +1,23 @@
 import type { Request, Response } from 'express';
 import { PurchaseReceiptService } from '@/services/purchaseReceipt.service';
-import { AppError, ValidationError } from '@/utils/errors';
+import { PurchaseOrderService } from '@/services/purchaseOrder.service';
+import { ValidationError } from '@/utils/errors';
+import {
+  assertOwnedWarehouse,
+  assertWarehouseManager,
+  ownedWarehouseIds,
+} from '@/utils/warehouseAccess';
 import { listPurchaseReceiptsQuerySchema } from '@/validators/purchase.validators';
 
 const purchaseReceiptService = new PurchaseReceiptService();
-
-const PLATFORM_ADMIN_ROLES = new Set([
-  'super_admin',
-  'platform_super_admin',
-  'platform_finance',
-  'platform_director',
-  'platform_cfo',
-]);
-
-const isPlatformAdmin = (req: Request): boolean => {
-  const role = req.user && 'role' in req.user ? req.user.role : undefined;
-  if (typeof role !== 'string') return false;
-  const normalized = role.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  return PLATFORM_ADMIN_ROLES.has(normalized);
-};
-
-const assertCanReceiveGoods = (req: Request) => {
-  if (req.user && !isPlatformAdmin(req)) {
-    throw new AppError('Only an admin can receive goods', 403, 'FORBIDDEN');
-  }
-};
+const purchaseOrderService = new PurchaseOrderService();
 
 export const createPurchaseReceipt = async (req: Request, res: Response) => {
-  assertCanReceiveGoods(req);
+  assertWarehouseManager(req, 'Only a warehouse manager can receive goods');
+  const order = await purchaseOrderService.get(req.body.purchaseOrderId);
+  const ownedIds = await ownedWarehouseIds(req);
+  assertOwnedWarehouse(order.warehouseId, ownedIds);
+  assertOwnedWarehouse(req.body.warehouseId ?? order.warehouseId, ownedIds);
   const receipt = await purchaseReceiptService.create({
     ...req.body,
     createdBy: req.body.createdBy ?? req.user?.sub,
@@ -40,17 +30,23 @@ export const listPurchaseReceipts = async (req: Request, res: Response) => {
   if (!parsed.success) {
     throw new ValidationError(parsed.error.errors.map((e) => e.message).join(', '));
   }
-  const data = await purchaseReceiptService.list(parsed.data);
+  const data = await purchaseReceiptService.list({
+    ...parsed.data,
+    warehouseIds: await ownedWarehouseIds(req),
+  });
   return res.status(200).json({ success: true, data });
 };
 
 export const getPurchaseReceipt = async (req: Request, res: Response) => {
   const receipt = await purchaseReceiptService.get(req.params.id);
+  assertOwnedWarehouse(receipt.warehouseId, await ownedWarehouseIds(req));
   return res.status(200).json({ success: true, data: receipt });
 };
 
 export const confirmPurchaseReceipt = async (req: Request, res: Response) => {
-  assertCanReceiveGoods(req);
-  const receipt = await purchaseReceiptService.confirm(req.params.id);
-  return res.status(200).json({ success: true, data: receipt });
+  assertWarehouseManager(req, 'Only a warehouse manager can receive goods');
+  const receipt = await purchaseReceiptService.get(req.params.id);
+  assertOwnedWarehouse(receipt.warehouseId, await ownedWarehouseIds(req));
+  const confirmed = await purchaseReceiptService.confirm(req.params.id);
+  return res.status(200).json({ success: true, data: confirmed });
 };

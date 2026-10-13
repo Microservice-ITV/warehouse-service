@@ -13,6 +13,7 @@ export class WarehouseRepository {
       address?: string | null;
       status?: WarehouseStatusValue;
       createdBy?: string | null;
+      sellerUserId?: string | null;
     },
     db: Db = prisma
   ): Promise<Warehouse> {
@@ -29,6 +30,14 @@ export class WarehouseRepository {
 
   async findById(id: string, db: Db = prisma): Promise<Warehouse | null> {
     return db.warehouse.findUnique({ where: { id } });
+  }
+
+  async listIdsByCreatedBy(createdBy: string, db: Db = prisma): Promise<string[]> {
+    const rows = await db.warehouse.findMany({
+      where: { createdBy },
+      select: { id: true },
+    });
+    return rows.map((row) => row.id);
   }
 
   async deleteById(id: string, db: Db = prisma): Promise<Warehouse> {

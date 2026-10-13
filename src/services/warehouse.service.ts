@@ -12,6 +12,7 @@ export class WarehouseService {
     address?: string | null;
     status?: 'ACTIVE' | 'INACTIVE';
     createdBy?: string | null;
+    sellerUserId?: string | null;
   }) {
     return this.warehouseRepository.create({
       name: input.name,
@@ -19,6 +20,7 @@ export class WarehouseService {
       address: input.address ?? null,
       status: input.status ?? 'ACTIVE',
       createdBy: input.createdBy ?? null,
+      sellerUserId: input.sellerUserId ?? null,
     });
   }
 
