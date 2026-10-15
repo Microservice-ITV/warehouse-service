@@ -5,6 +5,7 @@ export const createWarehouseSchema = z.object({
   code: z.string().max(40).nullable().optional(),
   address: z.string().max(255).nullable().optional(),
   status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+  capacityUnits: z.number().int().positive().max(10_000_000),
   managerUserId: z.string().uuid().optional(),
 });
 
@@ -14,6 +15,7 @@ export const updateWarehouseSchema = z
     code: z.string().max(40).nullable().optional(),
     address: z.string().max(255).nullable().optional(),
     status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+    capacityUnits: z.number().int().positive().max(10_000_000).nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, 'At least one field must be provided');
 

@@ -30,15 +30,23 @@ import {
   applyCostAdjustment,
   createAdditionalCost,
   createCostAdjustment,
+  confirmDamageReport,
+  createDamageReport,
   createDeliveryStage,
   createPurchaseOrder,
+  deliveryAgentPickupOrder,
+  deliveryAgentProcessOrder,
+  getDamageReport,
   getPurchaseOrder,
   downloadPurchaseOrderAttachment,
   listAdditionalCosts,
   listCostAdjustments,
+  listDamageReports,
   listDeliveryStages,
   listPurchaseOrders,
   receiveSupplierOrder,
+  sellerReceiveDeliveryOrder,
+  markPurchaseOrderRouteArrived,
   updatePurchaseOrderStatus,
 } from '@/controllers/purchaseOrder.controller';
 import {
@@ -67,6 +75,7 @@ import {
   createAdditionalCostSchema,
   createCostAdjustmentSchema,
   createDeliveryStageSchema,
+  createDamageReportSchema,
   createPurchaseOrderSchema,
   createPurchaseReceiptSchema,
   createPurchaseReturnSchema,
@@ -107,6 +116,23 @@ router.get(
 );
 router.patch('/purchase-orders/:id/status', authOrService, validate(updatePurchaseOrderStatusSchema), asyncHandler(updatePurchaseOrderStatus));
 router.post('/purchase-orders/:id/receive-supplier', authOrService, asyncHandler(receiveSupplierOrder));
+router.post('/purchase-orders/:id/delivery-pickup', authOrService, asyncHandler(deliveryAgentPickupOrder));
+router.post('/purchase-orders/:id/delivery-process', authOrService, asyncHandler(deliveryAgentProcessOrder));
+router.post('/purchase-orders/:id/seller-receive', authOrService, asyncHandler(sellerReceiveDeliveryOrder));
+router.post(
+  '/purchase-orders/:id/route-arrived',
+  authOrService,
+  asyncHandler(markPurchaseOrderRouteArrived),
+);
+router.post(
+  '/purchase-orders/:id/damage-reports',
+  authOrService,
+  validate(createDamageReportSchema),
+  asyncHandler(createDamageReport),
+);
+router.get('/damage-reports', authOrService, asyncHandler(listDamageReports));
+router.get('/damage-reports/:id', authOrService, asyncHandler(getDamageReport));
+router.post('/damage-reports/:id/confirm', authOrService, asyncHandler(confirmDamageReport));
 
 router.get('/purchase-orders/:id/delivery-stages', authOrService, asyncHandler(listDeliveryStages));
 router.post('/purchase-orders/:id/delivery-stages', authOrService, validate(createDeliveryStageSchema), asyncHandler(createDeliveryStage));

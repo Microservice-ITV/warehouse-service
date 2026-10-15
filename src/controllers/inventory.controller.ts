@@ -2,6 +2,7 @@ import type { Request } from 'express';
 import type { Response } from 'express';
 import { InventoryService, type StockViewer } from '@/services/inventory.service';
 import { AppError, ValidationError } from '@/utils/errors';
+import { withActorLabel } from '@/utils/actorLabel';
 import {
   isPlatformAdmin,
   isWarehouseManager,
@@ -23,6 +24,7 @@ const stockViewer = (req: Request): StockViewer => {
   return { kind: 'seller', userId: userIds[0] ?? '', userIds };
 };
 
+/** Plain user id for transfers / ownership checks (never a display label). */
 const resolveCreatedBy = (req: Request): string | undefined => {
   if (req.user?.sub) return req.user.sub;
   if (typeof req.body.createdBy === 'string' && req.body.createdBy.length > 0) {
@@ -85,15 +87,33 @@ export const requestTransfer = async (req: Request, res: Response) => {
     { fromWarehouseId: req.body.fromWarehouseId, productId: req.body.productId },
     viewer,
   );
+  const requestedBy = resolveCreatedBy(req);
+  const actorIds = [
+    ...new Set(
+      [
+        requestedBy,
+        requestUserId(req),
+        typeof req.user?.sub === 'string' ? req.user.sub.trim() : '',
+        ...(viewer.kind === 'seller' ? (viewer.userIds ?? [viewer.userId]) : []),
+        ...(viewer.kind === 'owner' ? [viewer.userId] : []),
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const data = await inventoryService.requestTransfer({
-    ...req.body,
-    requestedBy: resolveCreatedBy(req),
-    requesterIds:
-      viewer.kind === 'seller'
-        ? (viewer.userIds ?? [viewer.userId])
-        : viewer.kind === 'owner'
-          ? [viewer.userId]
-          : [],
+    fromWarehouseId: req.body.fromWarehouseId,
+    toWarehouseId: req.body.toWarehouseId,
+    productId: req.body.productId,
+    variantId: req.body.variantId,
+    quantity: req.body.quantity,
+    referenceId: req.body.referenceId,
+    referenceType: req.body.referenceType,
+    requestedBy,
+    requesterIds: actorIds,
+    // Seller W→W: auto-Approved (SELLER_APPROVED); WM must Complete transfer.
+    // Accept explicit flag from seller UI so shop users are not stuck as PENDING.
+    sellerInitiated:
+      viewer.kind === 'seller' ||
+      (req.body.sellerInitiated === true && viewer.kind !== 'owner'),
   });
   return res.status(201).json({ success: true, data });
 };
@@ -160,7 +180,8 @@ export const getStockMovements = async (req: Request, res: Response) => {
     throw new ValidationError(parsed.error.errors.map((e) => e.message).join(', '));
   }
 
-  const data = await inventoryService.listMovements(parsed.data, stockViewer(req));
+  const rows = await inventoryService.listMovements(parsed.data, stockViewer(req));
+  const data = rows.map((row) => withActorLabel(row));
   return res.status(200).json({ success: true, data });
 };
 

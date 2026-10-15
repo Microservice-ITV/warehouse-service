@@ -32,6 +32,14 @@ export const requestUserId = (req: Request): string | undefined => {
 
 export const isWarehouseManager = (req: Request): boolean => requestRole(req) === 'warehouse_manager';
 
+export const isDeliveryAgent = (req: Request): boolean => requestRole(req) === 'delivery_agent';
+
+export const assertDeliveryAgent = (req: Request, message: string) => {
+  if (!req.user || !isDeliveryAgent(req)) {
+    throw new AppError(message, 403, 'FORBIDDEN');
+  }
+};
+
 /** Undefined means no owner filter. An empty list means the manager has no warehouses. */
 export const ownedWarehouseIds = async (req: Request): Promise<string[] | undefined> => {
   if (!req.user || !isWarehouseManager(req)) return undefined;

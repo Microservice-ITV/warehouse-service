@@ -19,7 +19,8 @@ export const INBOUND_MOVEMENT_TYPES = [
 const stockIdentity = {
   warehouseId: z.string().uuid(),
   productId: z.string().uuid(),
-  variantId: z.string().max(64).optional(),
+  // Color/size keys are `v1::{colorId}::{sizeId}::{colorName}::{sizeName}`.
+  variantId: z.string().max(255).optional(),
 };
 
 const actor = {
@@ -40,8 +41,10 @@ export const transferStockSchema = z.object({
   fromWarehouseId: z.string().uuid().optional(),
   toWarehouseId: z.string().uuid(),
   fromSeller: z.boolean().optional(),
+  /** Seller warehouse→warehouse: skip seller approval (WM still completes). */
+  sellerInitiated: z.boolean().optional(),
   productId: z.string().uuid(),
-  variantId: z.string().max(64).optional(),
+  variantId: z.string().max(255).optional(),
   ...actor,
   quantity: z.coerce.number().int().positive(),
 });

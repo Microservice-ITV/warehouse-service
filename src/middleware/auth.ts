@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 import env from '@/config/env';
+import { rememberActor } from '@/utils/actorLabel';
 import { AppError } from '@/utils/errors';
 
 export interface AuthPayload extends JwtPayload {
@@ -34,6 +35,16 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction) =
     } else {
       req.user = decoded;
     }
+    const userId =
+      (typeof req.user.sub === 'string' && req.user.sub.trim()) ||
+      (typeof req.user.userId === 'string' && req.user.userId.trim()) ||
+      '';
+    const headerName = req.header('x-actor-name');
+    const label =
+      (typeof headerName === 'string' && headerName.trim()) ||
+      (typeof req.user.email === 'string' && req.user.email.trim()) ||
+      '';
+    if (userId && label) rememberActor(userId, label);
     return next();
   } catch {
     return next(new AppError('Invalid or expired token', 401, 'UNAUTHORIZED'));

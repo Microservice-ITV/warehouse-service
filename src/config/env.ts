@@ -11,6 +11,11 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   JWT_SECRET: z.string().min(16).optional(),
   SERVICE_API_KEY: z.string().min(8),
+  /** Base URL for product-service API (used to credit shop stock after warehouse receive). */
+  PRODUCT_SERVICE_URL: z
+    .string()
+    .url()
+    .default('http://product-service-dev:5001/api/v1'),
 
   RABBITMQ_URL: z.string().min(1),
   RABBITMQ_EXCHANGE: z.string().default('order_events'),
