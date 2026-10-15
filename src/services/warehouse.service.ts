@@ -21,6 +21,18 @@ const asCapacityFields = (warehouse: Warehouse): WarehouseCapacityFields => ({
       : null,
 });
 
+const actorOwnsWarehouse = (
+  warehouse: Pick<Warehouse, 'createdBy' | 'sellerUserId'>,
+  ownerUserIds?: string[],
+) => {
+  if (!ownerUserIds || ownerUserIds.length === 0) return true;
+  const owners = new Set(ownerUserIds);
+  return (
+    (!!warehouse.createdBy && owners.has(warehouse.createdBy)) ||
+    (!!warehouse.sellerUserId && owners.has(warehouse.sellerUserId))
+  );
+};
+
 export class WarehouseService {
   private readonly warehouseRepository = new WarehouseRepository();
 
@@ -79,10 +91,10 @@ export class WarehouseService {
       status?: 'ACTIVE' | 'INACTIVE';
       capacityUnits?: number | null;
     },
-    createdBy?: string
+    ownerUserIds?: string[],
   ) {
     const existing = await this.warehouseRepository.findById(id);
-    if (!existing || (createdBy && existing.createdBy !== createdBy)) {
+    if (!existing || !actorOwnsWarehouse(existing, ownerUserIds)) {
       throw new NotFoundError('Warehouse not found');
     }
     const warehouse = await this.warehouseRepository.updateById(id, input);
@@ -109,16 +121,30 @@ export class WarehouseService {
     return this.withCapacityMany(warehouses);
   }
 
-  async deleteWarehouse(id: string, createdBy?: string) {
+  async deleteWarehouse(id: string, ownerUserIds?: string[]) {
     const existing = await this.warehouseRepository.findById(id);
-    if (!existing || (createdBy && existing.createdBy !== createdBy)) {
+    if (!existing || !actorOwnsWarehouse(existing, ownerUserIds)) {
       throw new NotFoundError('Warehouse not found');
     }
+
+    const productRows = await prisma.inventoryStock.count({
+      where: {
+        warehouseId: id,
+        OR: [{ onHandQty: { gt: 0 } }, { reservedQty: { gt: 0 } }, { availableQty: { gt: 0 } }],
+      },
+    });
+    if (productRows > 0) {
+      throw new ConflictError('This warehouse still has products and cannot be deleted.');
+    }
+
     try {
-      await this.warehouseRepository.deleteById(id);
+      await prisma.$transaction(async (tx) => {
+        await tx.inventoryMovement.deleteMany({ where: { warehouseId: id } });
+        await this.warehouseRepository.deleteById(id, tx);
+      });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
-        throw new ConflictError('This warehouse has inventory history and cannot be deleted.');
+        throw new ConflictError('This warehouse still has products and cannot be deleted.');
       }
       throw error;
     }
