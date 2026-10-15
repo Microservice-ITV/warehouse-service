@@ -47,7 +47,7 @@ const ownerUserIds = (req: Request): string[] | undefined => {
   return [
     ...new Set(
       [requestUserId(req), typeof req.user?.sub === 'string' ? req.user.sub.trim() : ''].filter(
-        Boolean,
+        (id): id is string => Boolean(id),
       ),
     ),
   ];
