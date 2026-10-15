@@ -41,6 +41,18 @@ const seesAllWarehouses = (req: Request): boolean => !req.user || isPlatformAdmi
 const sellerOwnerId = (req: Request): string | undefined =>
   seesAllWarehouses(req) ? undefined : requestUserId(req);
 
+/** Seller JWT may store the id on `sub` and/or `userId`. */
+const ownerUserIds = (req: Request): string[] | undefined => {
+  if (seesAllWarehouses(req)) return undefined;
+  return [
+    ...new Set(
+      [requestUserId(req), typeof req.user?.sub === 'string' ? req.user.sub.trim() : ''].filter(
+        Boolean,
+      ),
+    ),
+  ];
+};
+
 export const createWarehouse = async (req: Request, res: Response) => {
   if (req.user && isPlatformAdmin(req)) {
     throw new AppError('An admin cannot create a warehouse', 403, 'FORBIDDEN');
@@ -73,16 +85,22 @@ export const createWarehouse = async (req: Request, res: Response) => {
 };
 
 export const updateWarehouse = async (req: Request, res: Response) => {
+  if (req.user && isPlatformAdmin(req)) {
+    throw new AppError('An admin cannot edit a warehouse', 403, 'FORBIDDEN');
+  }
   const warehouse = await warehouseService.updateWarehouse(
     req.params.id,
     req.body,
-    sellerOwnerId(req)
+    isWarehouseManager(req) ? ownerUserIds(req) : undefined,
   );
   return res.status(200).json({ success: true, data: warehouse });
 };
 
 export const deleteWarehouse = async (req: Request, res: Response) => {
-  await warehouseService.deleteWarehouse(req.params.id, sellerOwnerId(req));
+  if (req.user && isPlatformAdmin(req)) {
+    throw new AppError('An admin cannot delete a warehouse', 403, 'FORBIDDEN');
+  }
+  await warehouseService.deleteWarehouse(req.params.id, ownerUserIds(req));
   return res.status(200).json({ success: true });
 };
 
