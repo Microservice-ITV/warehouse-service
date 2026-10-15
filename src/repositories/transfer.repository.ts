@@ -53,6 +53,8 @@ export class TransferRepository {
       sellerUserId?: string;
       sellerUserIds?: string[];
       sellerWarehouseIds?: string[];
+      /** Transfers of products this seller purchased (any warehouse). */
+      sellerProductIds?: string[];
       approvalSellerUserIds?: string[];
     },
     db: Db = prisma
@@ -101,6 +103,9 @@ export class TransferRepository {
       if (params.sellerWarehouseIds && params.sellerWarehouseIds.length > 0) {
         sellerOr.push({ fromWarehouseId: { in: params.sellerWarehouseIds } });
         sellerOr.push({ toWarehouseId: { in: params.sellerWarehouseIds } });
+      }
+      if (params.sellerProductIds && params.sellerProductIds.length > 0) {
+        sellerOr.push({ productId: { in: params.sellerProductIds } });
       }
       and.push({ OR: sellerOr });
     }

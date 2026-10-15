@@ -6,6 +6,8 @@ const ORDER_STATUSES = [
   'PENDING',
   'APPROVED',
   'ORDERED',
+  'IN_TRANSIT',
+  'ARRIVED',
   'PARTIALLY_RECEIVED',
   'RECEIVED',
   'CLOSED',
@@ -13,6 +15,11 @@ const ORDER_STATUSES = [
   'LOW_STOCK',
   'RESTOCK_REQUESTED',
   'RESTOCK_APPROVED',
+  'DELIVERY_PICKED_UP',
+  'AWAITING_WAREHOUSE_RECEIPT',
+  'AWAITING_SELLER_RECEIPT',
+  'SELLER_RECEIVED',
+  'WAREHOUSE_RECEIVED',
 ] as const;
 
 const RECEIPT_STATUSES = ['DRAFT', 'POSTED', 'CANCELLED'] as const;
@@ -63,16 +70,55 @@ export const listSuppliersQuerySchema = z.object({
 
 const purchaseOrderItemSchema = z.object({
   productId: z.string().uuid(),
-  variantId: z.string().max(120).optional(),
+  variantId: z.string().max(255).optional(),
   sku: z.string().max(120).nullable().optional(),
   productName: z.string().max(255).nullable().optional(),
   description: z.string().max(255).nullable().optional(),
   unit: z.string().max(40).nullable().optional(),
+  colorId: z.string().uuid().nullable().optional(),
+  sizeId: z.string().uuid().nullable().optional(),
+  colorName: z.string().max(120).nullable().optional(),
+  sizeName: z.string().max(120).nullable().optional(),
+  length: z.number().nonnegative().nullable().optional(),
+  width: z.number().nonnegative().nullable().optional(),
+  height: z.number().nonnegative().nullable().optional(),
   quantity: z.number().int().positive(),
   unitCost: z.number().nonnegative(),
   discountAmount: z.number().nonnegative().optional(),
   weightPerUnit: z.number().nonnegative().optional(),
   volumePerUnit: z.number().nonnegative().optional(),
+});
+
+export const createDamageReportSchema = z.object({
+  notes: z.string().max(2000).nullable().optional(),
+  items: z
+    .array(
+      z.object({
+        purchaseOrderItemId: z.string().uuid().nullable().optional(),
+        productId: z.string().uuid(),
+        variantId: z.string().max(255).optional(),
+        productName: z.string().max(255).nullable().optional(),
+        quantity: z.number().int().positive(),
+        damageType: z.string().max(120).nullable().optional(),
+        notes: z.string().max(1000).nullable().optional(),
+      }),
+    )
+    .min(1),
+});
+
+/** Delivery agent confirms each line's variation + qty before sending to seller. */
+export const deliveryProcessConfirmSchema = z.object({
+  notes: z.string().max(2000).nullable().optional(),
+  items: z
+    .array(
+      z.object({
+        purchaseOrderItemId: z.string().uuid(),
+        confirmedQty: z.number().int().nonnegative(),
+        variationCorrect: z.boolean(),
+        notes: z.string().max(1000).nullable().optional(),
+      }),
+    )
+    .min(1),
 });
 
 const deliveryStageBaseSchema = z.object({
@@ -114,6 +160,8 @@ export const createPurchaseOrderSchema = z.object({
   taxAmount: z.number().nonnegative().optional(),
   shippingAmount: z.number().nonnegative().optional(),
   items: z.array(purchaseOrderItemSchema).min(1),
+  /** Ordered transit checkpoints, e.g. ["China","Lashio","Mandalay","Yangon"]. Min 2 when not draft. */
+  routeStops: z.array(z.string().trim().min(1).max(120)).min(2).max(8).optional(),
   deliveryStages: z.array(deliveryStageBaseSchema).optional(),
   additionalCosts: z.array(additionalCostBaseSchema).optional(),
   attachments: z
@@ -181,7 +229,6 @@ const purchaseReceiptItemSchema = z.object({
 export const createPurchaseReceiptSchema = z.object({
   purchaseOrderId: z.string().uuid(),
   warehouseId: z.string().uuid().optional(),
-  notes: z.string().max(1000).nullable().optional(),
   createdBy: z.string().max(120).optional(),
   items: z.array(purchaseReceiptItemSchema).min(1),
 });

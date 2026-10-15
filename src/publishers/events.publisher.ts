@@ -18,6 +18,20 @@ export class EventsPublisher {
     totalStock: number;
     availableStock: number;
     correlationId: string;
+    /** Color×size breakdown from inventory_stocks.variant_id (v1::{colorId}::{sizeId}…). */
+    variants?: Array<{
+      colorId: string;
+      sizeId: string;
+      colorName?: string;
+      sizeName?: string;
+      availableStock: number;
+      totalStock: number;
+      unitCost?: number | null;
+      length?: number | null;
+      width?: number | null;
+      height?: number | null;
+      weight?: number | null;
+    }>;
     db?: Db;
   }) {
     const availabilityStatus =
@@ -32,6 +46,7 @@ export class EventsPublisher {
         totalStock: input.totalStock,
         availableStock: input.availableStock,
         availabilityStatus,
+        ...(input.variants && input.variants.length > 0 ? { variants: input.variants } : {}),
       },
     });
     await outboxRepository.enqueue({

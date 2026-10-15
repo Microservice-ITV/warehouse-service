@@ -1,39 +1,92 @@
+import type { Warehouse } from '@prisma/client';
 import { Prisma } from '@prisma/client';
+import prisma from '@/config/database';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
 import { ConflictError, NotFoundError } from '@/utils/errors';
 import logger from '@/utils/logger';
+import {
+  capacitySnapshot,
+  type WarehouseCapacityFields,
+  type WarehouseCapacitySnapshot,
+} from '@/utils/warehouseCapacity';
+
+export type WarehouseWithCapacity = Warehouse & WarehouseCapacitySnapshot;
+
+const asCapacityFields = (warehouse: Warehouse): WarehouseCapacityFields => ({
+  id: warehouse.id,
+  name: warehouse.name,
+  capacityUnits:
+    'capacityUnits' in warehouse
+      ? ((warehouse as WarehouseCapacityFields).capacityUnits ?? null)
+      : null,
+});
 
 export class WarehouseService {
   private readonly warehouseRepository = new WarehouseRepository();
+
+  private async withCapacity(warehouse: Warehouse): Promise<WarehouseWithCapacity> {
+    const aggregate = await prisma.inventoryStock.aggregate({
+      where: { warehouseId: warehouse.id },
+      _sum: { onHandQty: true },
+    });
+    return {
+      ...warehouse,
+      ...capacitySnapshot(asCapacityFields(warehouse), aggregate._sum.onHandQty ?? 0),
+    };
+  }
+
+  private async withCapacityMany(warehouses: Warehouse[]): Promise<WarehouseWithCapacity[]> {
+    if (warehouses.length === 0) return [];
+    const usage = await prisma.inventoryStock.groupBy({
+      by: ['warehouseId'],
+      where: { warehouseId: { in: warehouses.map((row) => row.id) } },
+      _sum: { onHandQty: true },
+    });
+    const usedById = new Map(usage.map((row) => [row.warehouseId, row._sum.onHandQty ?? 0]));
+    return warehouses.map((warehouse) => ({
+      ...warehouse,
+      ...capacitySnapshot(asCapacityFields(warehouse), usedById.get(warehouse.id) ?? 0),
+    }));
+  }
 
   async createWarehouse(input: {
     name: string;
     code?: string | null;
     address?: string | null;
     status?: 'ACTIVE' | 'INACTIVE';
+    capacityUnits: number;
     createdBy?: string | null;
     sellerUserId?: string | null;
   }) {
-    return this.warehouseRepository.create({
+    const warehouse = await this.warehouseRepository.create({
       name: input.name,
       code: input.code ?? null,
       address: input.address ?? null,
       status: input.status ?? 'ACTIVE',
+      capacityUnits: input.capacityUnits,
       createdBy: input.createdBy ?? null,
       sellerUserId: input.sellerUserId ?? null,
     });
+    return this.withCapacity(warehouse);
   }
 
   async updateWarehouse(
     id: string,
-    input: { name?: string; code?: string | null; address?: string | null; status?: 'ACTIVE' | 'INACTIVE' },
+    input: {
+      name?: string;
+      code?: string | null;
+      address?: string | null;
+      status?: 'ACTIVE' | 'INACTIVE';
+      capacityUnits?: number | null;
+    },
     createdBy?: string
   ) {
     const existing = await this.warehouseRepository.findById(id);
     if (!existing || (createdBy && existing.createdBy !== createdBy)) {
       throw new NotFoundError('Warehouse not found');
     }
-    return this.warehouseRepository.updateById(id, input);
+    const warehouse = await this.warehouseRepository.updateById(id, input);
+    return this.withCapacity(warehouse);
   }
 
   async getWarehouse(id: string, createdBy?: string) {
@@ -41,11 +94,19 @@ export class WarehouseService {
     if (!warehouse || (createdBy && warehouse.createdBy !== createdBy)) {
       throw new NotFoundError('Warehouse not found');
     }
-    return warehouse;
+    return this.withCapacity(warehouse);
   }
 
-  async listWarehouses(params: { status?: 'ACTIVE' | 'INACTIVE'; createdBy?: string } = {}) {
-    return this.warehouseRepository.list(params);
+  async listWarehouses(
+    params: {
+      status?: 'ACTIVE' | 'INACTIVE';
+      createdBy?: string;
+      sellerUserId?: string;
+      ownerUserIds?: string[];
+    } = {},
+  ) {
+    const warehouses = await this.warehouseRepository.list(params);
+    return this.withCapacityMany(warehouses);
   }
 
   async deleteWarehouse(id: string, createdBy?: string) {

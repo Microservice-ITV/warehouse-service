@@ -1,3 +1,20 @@
+/** Color×size row from product-service product.created / product.updated. */
+export interface ProductVariantEventData {
+  variant_id?: string;
+  sku?: string;
+  price?: number;
+  base_price?: number;
+  stock?: number;
+  warehouse_stock_mirror?: number;
+  color_id?: string;
+  color_code?: string;
+  color_name?: string;
+  size_id?: string;
+  size_code?: string;
+  size_name?: string;
+  is_primary?: boolean;
+}
+
 export interface ProductEventData {
   product_id: string;
   slug?: string;
@@ -17,6 +34,7 @@ export interface ProductEventData {
   images?: string[];
   image_url?: string | null;
   is_active?: boolean;
+  variants?: ProductVariantEventData[];
 }
 
 export interface ShopEventData {

@@ -1,5 +1,6 @@
 import type { InventoryMovement, MovementType, Prisma } from '@prisma/client';
 import prisma from '@/config/database';
+import { encodeActor } from '@/utils/actorLabel';
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -33,7 +34,8 @@ export class MovementRepository {
         referenceType: params.referenceType ?? null,
         referenceId: params.referenceId ?? null,
         unitCost: params.unitCost ?? null,
-        createdBy: params.createdBy ?? null,
+        // Embed display label when known (from X-Actor-Name / JWT email cache).
+        createdBy: encodeActor(params.createdBy) ?? null,
       },
     });
   }

@@ -125,6 +125,23 @@ export class InventoryRepository {
     };
   }
 
+  /** Per inventory variantId row totals for one product (all warehouses). */
+  async listVariantTotalsByProductId(
+    productId: string,
+    db: Db = prisma
+  ): Promise<Array<{ variantId: string; available: number; total: number }>> {
+    const rows = await db.inventoryStock.groupBy({
+      by: ['variantId'],
+      where: { productId },
+      _sum: { availableQty: true, onHandQty: true },
+    });
+    return rows.map((row) => ({
+      variantId: row.variantId,
+      available: row._sum.availableQty ?? 0,
+      total: row._sum.onHandQty ?? 0,
+    }));
+  }
+
   async computeTotalsByProductIds(
     productIds: string[],
     db: Db = prisma

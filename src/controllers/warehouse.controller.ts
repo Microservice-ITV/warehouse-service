@@ -65,6 +65,7 @@ export const createWarehouse = async (req: Request, res: Response) => {
     code: req.body.code,
     address: req.body.address,
     status: req.body.status,
+    capacityUnits: req.body.capacityUnits,
     createdBy: managerUserId ?? null,
     sellerUserId: sellerUserId ?? null,
   });
@@ -105,9 +106,22 @@ export const listWarehouses = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, data: [] });
   }
 
+  // Managers own via createdBy. Sellers own via sellerUserId (and legacy createdBy).
   const data = await warehouseService.listWarehouses({
     status: parsed.data.status,
-    createdBy: ownerId,
+    ...(isWarehouseManager(req) && ownerId
+      ? { createdBy: ownerId }
+      : ownerId
+        ? {
+            ownerUserIds: [
+              ...new Set(
+                [ownerId, typeof req.user?.sub === 'string' ? req.user.sub.trim() : ''].filter(
+                  Boolean,
+                ),
+              ),
+            ],
+          }
+        : {}),
   });
 
   if (!includePurchased || !ownerId || seesAllWarehouses(req) || isWarehouseManager(req)) {
@@ -119,7 +133,7 @@ export const listWarehouses = async (req: Request, res: Response) => {
       [ownerId, typeof req.user?.sub === 'string' ? req.user.sub.trim() : ''].filter(Boolean),
     ),
   ];
-  const extraIds = (await inventoryService.purchasedWarehouseIds(purchaseUserIds)).filter(
+  const extraIds = (await inventoryService.sellerVisibleWarehouseIds(purchaseUserIds)).filter(
     (id) => !data.some((warehouse) => warehouse.id === id),
   );
   const extras = [];

@@ -1,11 +1,9 @@
 import { ProductSnapshotRepository } from '@/repositories/productSnapshot.repository';
-import { InventoryService } from '@/services/inventory.service';
 import type { ProductEventData } from '@/events/types';
 import { ValidationError } from '@/utils/errors';
 
 export class ProductSnapshotService {
   private readonly productSnapshotRepository = new ProductSnapshotRepository();
-  private readonly inventoryService = new InventoryService();
 
   async upsertFromProductEvent(data: ProductEventData) {
     if (!data.product_id || !data.shop_id) {
@@ -22,10 +20,8 @@ export class ProductSnapshotService {
 
     const images = Array.isArray(data.images) ? data.images.map((value) => String(value)) : [];
 
-    await this.inventoryService.ensureInventoryRowsForProduct({
-      productId: data.product_id,
-      shopId: data.shop_id,
-    });
+    // Snapshot only — do not seed inventory_stocks from the product catalog.
+    // Inventory rows are created when stock is received (GRN / transfer / adjust).
 
     return this.productSnapshotRepository.upsert({
       productId: data.product_id,

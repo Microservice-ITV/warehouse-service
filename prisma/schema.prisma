@@ -12,6 +12,8 @@ model Warehouse {
   name      String
   address   String?
   status    WarehouseStatus @default(ACTIVE)
+  /// Max units this warehouse can hold. Null = unlimited (legacy rows).
+  capacityUnits Int? @map("capacity_units")
   /// Warehouse manager assigned to this warehouse.
   createdBy String?
   /// Seller who created the warehouse and orders stock into it.
@@ -167,7 +169,7 @@ model WarehouseTransfer {
   @@map("warehouse_transfers")
 }
 
-/// Stock a seller received by ordering from a warehouse.
+/// Stock a seller owns (from delivery-agent handoff or earlier warehouse orders).
 model SellerStock {
   id           String   @id @default(uuid())
   userId       String   @map("user_id")
@@ -291,6 +293,8 @@ model PurchaseOrder {
   /// WAREHOUSE: seller is taking stock already in the warehouse.
   /// SUPPLIER: seller is buying from a supplier so the warehouse can be restocked.
   orderKind      PurchaseOrderKind   @default(SUPPLIER) @map("order_kind")
+  /// Index of the active transit leg (from routeStops[i] → routeStops[i+1]).
+  routeLegIndex  Int                 @default(0) @map("route_leg_index")
   createdAt      DateTime            @default(now()) @map("created_at")
   updatedAt      DateTime            @updatedAt @map("updated_at")
 
@@ -302,12 +306,33 @@ model PurchaseOrder {
   deliveryStages  PurchaseDeliveryStage[]
   additionalCosts PurchaseAdditionalCost[]
   costAdjustments PurchaseCostAdjustment[]
-  attachments     PurchaseOrderAttachment[]
+  attachments       PurchaseOrderAttachment[]
+  damageReports     DamageReport[]
+  deliveryHandoffs  DeliveryHandoff[]
+  routeStops        PurchaseOrderRouteStop[]
 
   @@index([supplierId])
   @@index([warehouseId])
   @@index([status, createdAt])
   @@map("purchase_orders")
+}
+
+/// Ordered transit checkpoints for a supplier purchase (e.g. China → Lashio → Mandalay → Yangon).
+model PurchaseOrderRouteStop {
+  id              String    @id @default(uuid())
+  purchaseOrderId String    @map("purchase_order_id")
+  sequence        Int
+  location        String
+  arrivedAt       DateTime? @map("arrived_at")
+  arrivedBy       String?   @map("arrived_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@unique([purchaseOrderId, sequence])
+  @@index([purchaseOrderId])
+  @@map("purchase_order_route_stops")
 }
 
 model PurchaseOrderAttachment {
@@ -334,6 +359,13 @@ model PurchaseOrderItem {
   productName     String?  @map("product_name")
   description     String?
   unit            String?
+  colorId         String?  @map("color_id")
+  sizeId          String?  @map("size_id")
+  colorName       String?  @map("color_name")
+  sizeName        String?  @map("size_name")
+  length          Decimal? @db.Decimal(12, 4)
+  width           Decimal? @db.Decimal(12, 4)
+  height          Decimal? @db.Decimal(12, 4)
   quantity        Int
   unitCost        Decimal  @db.Decimal(12, 2) @map("unit_cost")
   discountAmount  Decimal  @default(0) @db.Decimal(14, 2) @map("discount_amount")
@@ -346,12 +378,93 @@ model PurchaseOrderItem {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  receiptItems  PurchaseReceiptItem[]
+  purchaseOrder       PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receiptItems        PurchaseReceiptItem[]
+  damageItems         DamageReportItem[]
+  deliveryHandoffItems DeliveryHandoffItem[]
 
   @@index([purchaseOrderId])
   @@index([productId])
   @@map("purchase_order_items")
+}
+
+/// Delivery agent confirms variation + quantity after pickup, before sending to seller.
+model DeliveryHandoff {
+  id              String   @id @default(uuid())
+  purchaseOrderId String   @map("purchase_order_id")
+  confirmedBy     String   @map("confirmed_by")
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder        @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  items         DeliveryHandoffItem[]
+
+  @@index([purchaseOrderId, createdAt])
+  @@index([confirmedBy])
+  @@map("delivery_handoffs")
+}
+
+model DeliveryHandoffItem {
+  id                    String  @id @default(uuid())
+  deliveryHandoffId     String  @map("delivery_handoff_id")
+  purchaseOrderItemId   String? @map("purchase_order_item_id")
+  productId             String  @map("product_id")
+  variantId             String  @default("") @map("variant_id")
+  productName           String? @map("product_name")
+  colorName             String? @map("color_name")
+  sizeName              String? @map("size_name")
+  orderedQty            Int     @map("ordered_qty")
+  confirmedQty          Int     @map("confirmed_qty")
+  variationCorrect      Boolean @default(true) @map("variation_correct")
+  notes                 String?
+
+  deliveryHandoff   DeliveryHandoff    @relation(fields: [deliveryHandoffId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
+
+  @@index([deliveryHandoffId])
+  @@map("delivery_handoff_items")
+}
+
+/// Damage found by a delivery agent when inspecting a supplier parcel.
+model DamageReport {
+  id              String             @id @default(uuid())
+  reportNumber    String             @unique @map("report_number")
+  purchaseOrderId String             @map("purchase_order_id")
+  reportedBy      String             @map("reported_by")
+  notes           String?
+  status          DamageReportStatus @default(SUBMITTED)
+  confirmedBy     String?            @map("confirmed_by")
+  confirmedAt     DateTime?          @map("confirmed_at")
+  stockReducedAt  DateTime?          @map("stock_reduced_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  items         DamageReportItem[]
+
+  @@index([purchaseOrderId, createdAt])
+  @@index([reportedBy])
+  @@index([status])
+  @@map("damage_reports")
+}
+
+model DamageReportItem {
+  id                  String  @id @default(uuid())
+  damageReportId      String  @map("damage_report_id")
+  purchaseOrderItemId String? @map("purchase_order_item_id")
+  productId           String  @map("product_id")
+  variantId           String  @default("") @map("variant_id")
+  productName         String? @map("product_name")
+  quantity            Int
+  damageType          String? @map("damage_type")
+  notes               String?
+
+  damageReport      DamageReport       @relation(fields: [damageReportId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
+
+  @@index([damageReportId])
+  @@map("damage_report_items")
 }
 
 /// Goods Receipt Note (GRN). Confirming one applies stock to inventory.
@@ -361,7 +474,6 @@ model PurchaseReceipt {
   purchaseOrderId String                @map("purchase_order_id")
   warehouseId     String                @map("warehouse_id")
   status          PurchaseReceiptStatus @default(DRAFT)
-  notes           String?
   receivedAt      DateTime?             @map("received_at")
   createdBy       String?               @map("created_by")
   createdAt       DateTime              @default(now()) @map("created_at")
@@ -529,6 +641,10 @@ enum PurchaseOrderStatus {
   PENDING
   APPROVED
   ORDERED
+  /// Goods are moving between route stops (seller tracks each leg).
+  IN_TRANSIT
+  /// Final route stop reached; delivery agent can pick up.
+  ARRIVED
   PARTIALLY_RECEIVED
   RECEIVED
   CLOSED
@@ -536,6 +652,22 @@ enum PurchaseOrderStatus {
   LOW_STOCK
   RESTOCK_REQUESTED
   RESTOCK_APPROVED
+  /// Delivery agent took the parcel at the final destination.
+  DELIVERY_PICKED_UP
+  /// Delivery agent sent the parcel to the warehouse manager.
+  AWAITING_WAREHOUSE_RECEIPT
+  /// @deprecated Prefer AWAITING_WAREHOUSE_RECEIPT.
+  AWAITING_SELLER_RECEIPT
+  /// @deprecated Prefer WAREHOUSE_RECEIVED.
+  SELLER_RECEIVED
+  /// Warehouse manager posted GRN; products are in the warehouse.
+  WAREHOUSE_RECEIVED
+}
+
+enum DamageReportStatus {
+  DRAFT
+  SUBMITTED
+  CONFIRMED
 }
 
 enum PurchaseOrderKind {

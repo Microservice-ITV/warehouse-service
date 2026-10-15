@@ -1,6 +1,7 @@
 import prisma from '@/config/database';
 import type { PurchaseReceiptStatus } from '@prisma/client';
 import { NotFoundError, ValidationError } from '@/utils/errors';
+import { resolveVariantIdFromLine } from '@/utils/variantKey';
 import { warehouseWhere } from '@/utils/warehouseAccess';
 import { EventsPublisher } from '@/publishers/events.publisher';
 import { InventoryService } from '@/services/inventory.service';
@@ -27,6 +28,7 @@ export class PurchaseReceiptService {
     purchaseOrderId?: string;
     warehouseId?: string;
     warehouseIds?: string[];
+    sellerUserIds?: string[];
     status?: PurchaseReceiptStatus;
     limit?: number;
   } = {}) {
@@ -35,8 +37,11 @@ export class PurchaseReceiptService {
         ...(params.purchaseOrderId ? { purchaseOrderId: params.purchaseOrderId } : {}),
         ...warehouseWhere(params.warehouseId, params.warehouseIds),
         ...(params.status ? { status: params.status } : {}),
+        ...(params.sellerUserIds
+          ? { purchaseOrder: { createdBy: { in: params.sellerUserIds } } }
+          : {}),
       },
-      include: { items: true },
+      include: { items: true, purchaseOrder: { select: { id: true, orderNumber: true, orderKind: true, status: true, createdBy: true } } },
       orderBy: { createdAt: 'desc' },
       take: params.limit ?? 100,
     });
@@ -54,41 +59,55 @@ export class PurchaseReceiptService {
   async create(input: {
     purchaseOrderId: string;
     warehouseId?: string;
-    notes?: string | null;
     createdBy?: string | null;
     items: PurchaseReceiptItemInput[];
   }) {
     const order = await prisma.purchaseOrder.findUnique({
       where: { id: input.purchaseOrderId },
+      include: { items: true },
     });
     if (!order) throw new NotFoundError('Purchase order not found');
-    if (order.orderKind === 'SUPPLIER') {
-      throw new ValidationError('Receive supplier products from Receive from Supplier');
+    if (order.orderKind === 'WAREHOUSE') {
+      throw new ValidationError(
+        'Warehouse orders are received by the seller (Receive on Purchase Orders), not as a goods receipt',
+      );
     }
-    if (order.status !== 'ORDERED' && order.status !== 'PARTIALLY_RECEIVED') {
-      throw new ValidationError('Goods can be received only after the purchase order is ordered');
+    if (
+      order.status !== 'AWAITING_WAREHOUSE_RECEIPT' &&
+      order.status !== 'AWAITING_SELLER_RECEIPT' &&
+      order.status !== 'PARTIALLY_RECEIVED'
+    ) {
+      throw new ValidationError(
+        'Supplier parcels can be received only after the delivery agent sends them to the warehouse',
+      );
     }
     if (input.items.length === 0) throw new ValidationError('At least one item is required');
 
-    const items = input.items.map((item) => ({
-      purchaseOrderItemId: item.purchaseOrderItemId ?? null,
-      productId: item.productId,
-      variantId: item.variantId ?? '',
-      quantity: item.quantity,
-      acceptedQty: item.acceptedQty ?? null,
-      rejectedQty: item.rejectedQty ?? 0,
-      unitCost: item.unitCost,
-      lineTotal: round2(item.quantity * item.unitCost),
-      batchNumber: item.batchNumber ?? null,
-      expiryAt: item.expiryAt ? new Date(item.expiryAt) : null,
-    }));
+    const orderItemById = new Map(order.items.map((item) => [item.id, item]));
+    const items = input.items.map((item) => {
+      const orderItem = item.purchaseOrderItemId
+        ? orderItemById.get(item.purchaseOrderItemId)
+        : undefined;
+      const variantId = resolveVariantIdFromLine(orderItem, item.variantId);
+      return {
+        purchaseOrderItemId: item.purchaseOrderItemId ?? null,
+        productId: item.productId,
+        variantId,
+        quantity: item.quantity,
+        acceptedQty: item.acceptedQty ?? null,
+        rejectedQty: item.rejectedQty ?? 0,
+        unitCost: item.unitCost,
+        lineTotal: round2(item.quantity * item.unitCost),
+        batchNumber: item.batchNumber ?? null,
+        expiryAt: item.expiryAt ? new Date(item.expiryAt) : null,
+      };
+    });
 
     return prisma.purchaseReceipt.create({
       data: {
         receiptNumber: generateDocumentNumber('GRN'),
         purchaseOrderId: input.purchaseOrderId,
         warehouseId: input.warehouseId ?? order.warehouseId,
-        notes: input.notes ?? null,
         createdBy: input.createdBy ?? null,
         items: { create: items },
       },
@@ -139,10 +158,30 @@ export class PurchaseReceiptService {
       });
       const fullyReceived = orderItems.every((item) => item.receivedQty >= item.quantity);
 
+      const nextStatus =
+        receipt.purchaseOrder.orderKind === 'SUPPLIER'
+          ? fullyReceived
+            ? 'WAREHOUSE_RECEIVED'
+            : 'PARTIALLY_RECEIVED'
+          : fullyReceived
+            ? 'RECEIVED'
+            : 'PARTIALLY_RECEIVED';
+
       await tx.purchaseOrder.update({
         where: { id: receipt.purchaseOrderId },
-        data: { status: fullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED' },
+        data: { status: nextStatus },
       });
+
+      if (receipt.purchaseOrder.orderKind === 'SUPPLIER' && fullyReceived) {
+        await tx.purchaseOrderStatusHistory.create({
+          data: {
+            purchaseOrderId: receipt.purchaseOrderId,
+            status: 'WAREHOUSE_RECEIVED',
+            note: 'Warehouse manager successfully received the products into the warehouse. The seller has been notified on Purchase Order Tracking.',
+            changedBy: receipt.createdBy ?? null,
+          },
+        });
+      }
 
       const updated = await tx.purchaseReceipt.update({
         where: { id },
@@ -157,7 +196,24 @@ export class PurchaseReceiptService {
         unitCost: Number(item.unitCost),
       }));
 
-      if (receipt.purchaseOrder.orderKind === 'WAREHOUSE') {
+      if (receipt.purchaseOrder.orderKind === 'SUPPLIER') {
+        // Stock goes to the warehouse chosen on the purchase order.
+        await this.inventoryService.applyGoodsReceiptInTx(tx, {
+          receiptId: receipt.id,
+          warehouseId: receipt.warehouseId,
+          items: receivedItems,
+        });
+        if (fullyReceived) {
+          await tx.damageReport.updateMany({
+            where: {
+              purchaseOrderId: receipt.purchaseOrderId,
+              status: 'CONFIRMED',
+              stockReducedAt: null,
+            },
+            data: { stockReducedAt: new Date() },
+          });
+        }
+      } else if (receipt.purchaseOrder.orderKind === 'WAREHOUSE') {
         if (!receipt.purchaseOrder.createdBy) {
           throw new ValidationError('This order has no seller');
         }
@@ -166,6 +222,7 @@ export class PurchaseReceiptService {
           await this.inventoryService.issueSale(tx, {
             warehouseId: receipt.warehouseId,
             productId: item.productId,
+            variantId: item.variantId || undefined,
             quantity: item.quantity,
             referenceId: receipt.id,
             createdBy: receipt.createdBy,
