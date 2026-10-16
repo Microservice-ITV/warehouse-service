@@ -36,6 +36,7 @@ const setupChannel = async (ch: Channel) => {
   await bindConsumerQueue(ch, rabbitConfig.consume.shopUpdated);
   await bindConsumerQueue(ch, rabbitConfig.consume.shopDeleted);
   await bindConsumerQueue(ch, rabbitConfig.consume.purchaseGoodsReceived);
+  await bindConsumerQueue(ch, rabbitConfig.consume.stockConfirmed);
 
   ch.prefetch(rabbitConfig.prefetch);
 };

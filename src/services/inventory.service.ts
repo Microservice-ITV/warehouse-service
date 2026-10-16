@@ -8,7 +8,13 @@ import { TransferRepository } from '@/repositories/transfer.repository';
 import { WarehouseRepository } from '@/repositories/warehouse.repository';
 import { EventsPublisher } from '@/publishers/events.publisher';
 import { AppError, NotFoundError, ValidationError } from '@/utils/errors';
-import { parseVariantId, resolveVariantIdFromLine, variantsMatch } from '@/utils/variantKey';
+import logger from '@/utils/logger';
+import {
+  parseVariantId,
+  resolveVariantId,
+  resolveVariantIdFromLine,
+  variantsMatch,
+} from '@/utils/variantKey';
 import { buildInventoryVariantBreakdown } from '@/utils/inventoryVariantBreakdown';
 import { takeMatchingPoItem } from '@/utils/matchReceiptPoItem';
 import { assertWarehouseCanAcceptUnits } from '@/utils/warehouseCapacity';
@@ -838,6 +844,91 @@ export class InventoryService {
     });
 
     return issued;
+  }
+
+  /**
+   * Customer checkout: take warehouse stock across locations for this product/variation.
+   * Catalog stock is already reduced by product-service; do not fail the event if a row is short.
+   */
+  async issueCustomerSale(input: {
+    productId: string;
+    quantity: number;
+    variantId?: string | null;
+    colorId?: string | null;
+    sizeId?: string | null;
+    referenceId: string;
+  }): Promise<void> {
+    if (input.quantity <= 0) return;
+
+    await prisma.$transaction(async (tx) => {
+      const rows = await this.inventoryRepository.listByProduct(input.productId, tx);
+      const wanted = resolveVariantId({
+        variantId: input.variantId,
+        colorId: input.colorId,
+        sizeId: input.sizeId,
+      });
+      const matched = wanted
+        ? rows.filter((row) => variantsMatch(row.variantId, wanted))
+        : rows;
+      const pool = (matched.length > 0 ? matched : rows).sort(
+        (a, b) => this.movableQty(b) - this.movableQty(a),
+      );
+
+      let remaining = input.quantity;
+      const touchedWarehouseIds = new Set<string>();
+      let lastAvailable = 0;
+
+      for (const row of pool) {
+        if (remaining <= 0) break;
+        const movable = this.movableQty(row);
+        if (movable <= 0) continue;
+        const take = Math.min(movable, remaining);
+        const moved = await this.applyDelta(tx, {
+          warehouseId: row.warehouseId,
+          productId: input.productId,
+          variantId: row.variantId,
+          delta: -take,
+          minAvailable: take,
+          errorMessage: 'Not enough stock',
+        });
+        await this.movementRepository.create({
+          warehouseId: row.warehouseId,
+          productId: input.productId,
+          variantId: row.variantId,
+          movementType: 'SALE_ISSUED',
+          quantity: moved.afterQty - moved.beforeQty,
+          beforeQty: moved.beforeQty,
+          afterQty: moved.afterQty,
+          referenceType: 'CUSTOMER_ORDER',
+          referenceId: input.referenceId,
+          createdBy: null,
+          db: tx,
+        });
+        touchedWarehouseIds.add(row.warehouseId);
+        lastAvailable = moved.stock.availableQty;
+        remaining -= take;
+      }
+
+      if (remaining > 0) {
+        logger.warn(
+          {
+            productId: input.productId,
+            referenceId: input.referenceId,
+            remaining,
+          },
+          'customer sale: warehouse inventory short after catalog confirm',
+        );
+      }
+
+      for (const warehouseId of touchedWarehouseIds) {
+        await this.publishStockChange(tx, {
+          productId: input.productId,
+          warehouseId,
+          correlationId: input.referenceId,
+          localAvailable: lastAvailable,
+        });
+      }
+    });
   }
 
   async listSellerStock(userId: string) {

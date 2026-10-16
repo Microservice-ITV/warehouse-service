@@ -54,6 +54,10 @@ const schema = z.object({
     .string()
     .default('warehouse_service.purchase_goods_received.dlq'),
 
+  RABBITMQ_STOCK_CONFIRMED_KEY: z.string().default('product.stock.confirmed'),
+  RABBITMQ_STOCK_CONFIRMED_QUEUE: z.string().default('warehouse_service.stock_confirmed'),
+  RABBITMQ_STOCK_CONFIRMED_DLQ: z.string().default('warehouse_service.stock_confirmed.dlq'),
+
   LOW_STOCK_THRESHOLD: z.coerce.number().int().min(0).default(5),
 
   OUTBOX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(3000),

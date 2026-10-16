@@ -50,6 +50,12 @@ export const rabbitConfig = {
       dlq: env.RABBITMQ_PURCHASE_GOODS_RECEIVED_DLQ,
       dlqRoutingKey: `${env.RABBITMQ_PURCHASE_GOODS_RECEIVED_KEY}.dlq`,
     },
+    stockConfirmed: {
+      routingKey: env.RABBITMQ_STOCK_CONFIRMED_KEY,
+      queue: env.RABBITMQ_STOCK_CONFIRMED_QUEUE,
+      dlq: env.RABBITMQ_STOCK_CONFIRMED_DLQ,
+      dlqRoutingKey: `${env.RABBITMQ_STOCK_CONFIRMED_KEY}.dlq`,
+    },
   },
   publish: {
     inventoryUpdated: env.RABBITMQ_INVENTORY_UPDATED_KEY,

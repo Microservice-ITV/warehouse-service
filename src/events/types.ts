@@ -126,6 +126,27 @@ export interface OrderPaidEvent {
   };
 }
 
+export interface StockConfirmedSaleItem {
+  product_id: string;
+  variant_id?: string;
+  color_id?: string;
+  size_id?: string;
+  quantity: number;
+}
+
+export interface StockConfirmedEvent {
+  event_id: string;
+  event: 'product.stock.confirmed';
+  correlation_id?: string;
+  producer?: string;
+  data: {
+    checkout_id: string;
+    reservation_id: string;
+    order_id?: string;
+    items?: StockConfirmedSaleItem[];
+  };
+}
+
 export interface OrderCancelledEvent {
   event_id: string;
   event: 'order.cancelled';
