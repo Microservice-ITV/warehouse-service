@@ -41,26 +41,29 @@ export async function creditProductShopStock(items: ShopStockCredit[]): Promise<
   if (credits.length === 0) return;
 
   const baseUrl = env.PRODUCT_SERVICE_URL.replace(/\/$/, '');
+  const url = `${baseUrl}/products/credit-shop-stock`;
 
   try {
-    const response = await fetch(`${baseUrl}/products/credit-shop-stock`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-service-key': env.SERVICE_API_KEY,
       },
       body: JSON.stringify({ items: credits }),
+      signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       logger.error('Failed to credit product shop stock', {
+        url,
         status: response.status,
         body: text.slice(0, 400),
       });
       throw new Error(`product-service credit-shop-stock failed (${response.status})`);
     }
   } catch (error) {
-    logger.error('product-service credit-shop-stock request failed', error as Error);
+    logger.error({ err: error, url }, 'product-service credit-shop-stock request failed');
     throw error;
   }
 }

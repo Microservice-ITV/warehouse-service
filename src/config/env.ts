@@ -15,7 +15,11 @@ const schema = z.object({
   PRODUCT_SERVICE_URL: z
     .string()
     .url()
-    .default('http://product-service-dev:5001/api/v1'),
+    .default(
+      process.env.NODE_ENV === 'production'
+        ? 'http://product-service:5001/api/v1'
+        : 'http://product-service-dev:5001/api/v1',
+    ),
 
   RABBITMQ_URL: z.string().min(1),
   RABBITMQ_EXCHANGE: z.string().default('order_events'),
