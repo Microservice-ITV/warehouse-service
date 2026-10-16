@@ -123,7 +123,8 @@ export class WarehouseService {
 
   async deleteWarehouse(id: string, ownerUserIds?: string[]) {
     const existing = await this.warehouseRepository.findById(id);
-    if (!existing || !actorOwnsWarehouse(existing, ownerUserIds)) {
+    const unassigned = !existing?.createdBy?.trim();
+    if (!existing || (!unassigned && !actorOwnsWarehouse(existing, ownerUserIds))) {
       throw new NotFoundError('Warehouse not found');
     }
 
