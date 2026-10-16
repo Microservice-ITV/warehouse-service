@@ -100,7 +100,10 @@ export const deleteWarehouse = async (req: Request, res: Response) => {
   if (req.user && isPlatformAdmin(req)) {
     throw new AppError('An admin cannot delete a warehouse', 403, 'FORBIDDEN');
   }
-  await warehouseService.deleteWarehouse(req.params.id, ownerUserIds(req));
+  await warehouseService.deleteWarehouse(
+    req.params.id,
+    isWarehouseManager(req) ? ownerUserIds(req) : undefined,
+  );
   return res.status(200).json({ success: true });
 };
 
