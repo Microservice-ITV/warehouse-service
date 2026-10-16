@@ -70,10 +70,10 @@ export const listSuppliersQuerySchema = z.object({
 
 const purchaseOrderItemSchema = z.object({
   productId: z.string().uuid(),
-  variantId: z.string().max(255).optional(),
+  variantId: z.string().optional(),
   sku: z.string().max(120).nullable().optional(),
-  productName: z.string().max(255).nullable().optional(),
-  description: z.string().max(255).nullable().optional(),
+  productName: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
   unit: z.string().max(40).nullable().optional(),
   colorId: z.string().uuid().nullable().optional(),
   sizeId: z.string().uuid().nullable().optional(),
@@ -96,8 +96,8 @@ export const createDamageReportSchema = z.object({
       z.object({
         purchaseOrderItemId: z.string().uuid().nullable().optional(),
         productId: z.string().uuid(),
-        variantId: z.string().max(255).optional(),
-        productName: z.string().max(255).nullable().optional(),
+        variantId: z.string().optional(),
+        productName: z.string().nullable().optional(),
         quantity: z.number().int().positive(),
         damageType: z.string().max(120).nullable().optional(),
         notes: z.string().max(1000).nullable().optional(),

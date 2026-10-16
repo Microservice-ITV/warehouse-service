@@ -20,7 +20,7 @@ const stockIdentity = {
   warehouseId: z.string().uuid(),
   productId: z.string().uuid(),
   // Color/size keys are `v1::{colorId}::{sizeId}::{colorName}::{sizeName}`.
-  variantId: z.string().max(255).optional(),
+  variantId: z.string().optional(),
 };
 
 const actor = {
@@ -44,7 +44,7 @@ export const transferStockSchema = z.object({
   /** Seller warehouse→warehouse: skip seller approval (WM still completes). */
   sellerInitiated: z.boolean().optional(),
   productId: z.string().uuid(),
-  variantId: z.string().max(255).optional(),
+  variantId: z.string().optional(),
   ...actor,
   quantity: z.coerce.number().int().positive(),
 });
