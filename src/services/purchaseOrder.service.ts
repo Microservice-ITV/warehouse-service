@@ -699,9 +699,10 @@ export class PurchaseOrderService {
       try {
         await creditProductShopStock(credits);
         await this.markShopStockCredited(order.id, changedBy ?? sellerUserId);
-      } catch {
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'unknown error';
         throw new AppError(
-          'Warehouse stock was already issued, but shop stock credit failed. Try Receive again.',
+          `Warehouse stock was already issued, but shop stock credit failed (${detail}). Try Receive again.`,
           502,
           'SHOP_STOCK_CREDIT_FAILED',
         );
@@ -826,9 +827,10 @@ export class PurchaseOrderService {
     try {
       await creditProductShopStock(shopCredits);
       await this.markShopStockCredited(order.id, actor);
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'unknown error';
       throw new AppError(
-        'Warehouse stock was issued, but shop stock credit failed. Click Receive again to finish.',
+        `Warehouse stock was issued, but shop stock credit failed (${detail}). Click Receive again to finish.`,
         502,
         'SHOP_STOCK_CREDIT_FAILED',
       );
