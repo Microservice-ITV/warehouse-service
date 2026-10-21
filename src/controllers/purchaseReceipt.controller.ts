@@ -34,6 +34,20 @@ const assertSellerOwnsOrder = (req: Request, createdBy: string | null) => {
   }
 };
 
+const assertSupplierParcelReadyForReceipt = (order: {
+  orderKind: string;
+  status: string;
+}) => {
+  if (order.orderKind !== 'SUPPLIER') return;
+  if (
+    order.status !== 'AWAITING_WAREHOUSE_RECEIPT' &&
+    order.status !== 'AWAITING_SELLER_RECEIPT' &&
+    order.status !== 'PARTIALLY_RECEIVED'
+  ) {
+    throw new ValidationError('This parcel is not waiting for a warehouse goods receipt');
+  }
+};
+
 export const createPurchaseReceipt = async (req: Request, res: Response) => {
   const order = await purchaseOrderService.get(req.body.purchaseOrderId);
 
@@ -41,25 +55,18 @@ export const createPurchaseReceipt = async (req: Request, res: Response) => {
     const ownedIds = await ownedWarehouseIds(req);
     assertOwnedWarehouse(order.warehouseId, ownedIds);
     assertOwnedWarehouse(req.body.warehouseId ?? order.warehouseId, ownedIds);
-    if (order.orderKind === 'SUPPLIER') {
-      if (
-        order.status !== 'AWAITING_WAREHOUSE_RECEIPT' &&
-        order.status !== 'AWAITING_SELLER_RECEIPT' &&
-        order.status !== 'PARTIALLY_RECEIVED'
-      ) {
-        throw new ValidationError(
-          'This parcel is not waiting for a warehouse goods receipt',
-        );
-      }
-    }
+    assertSupplierParcelReadyForReceipt(order);
   } else if (isPlatformAdmin(req)) {
     // Platform admins may post receipts for support cases.
-  } else {
+  } else if (isDeliveryAgent(req)) {
     throw new AppError(
-      'Only the warehouse manager can post goods receipts for supplier parcels',
+      'Delivery agents cannot post goods receipts for supplier parcels',
       403,
       'FORBIDDEN',
     );
+  } else {
+    assertSellerOwnsOrder(req, order.createdBy);
+    assertSupplierParcelReadyForReceipt(order);
   }
 
   const receipt = await purchaseReceiptService.create({
@@ -121,12 +128,14 @@ export const confirmPurchaseReceipt = async (req: Request, res: Response) => {
     assertOwnedWarehouse(receipt.warehouseId, await ownedWarehouseIds(req));
   } else if (isPlatformAdmin(req)) {
     // Platform admins may confirm receipts for support cases.
-  } else {
+  } else if (isDeliveryAgent(req)) {
     throw new AppError(
-      'Only the warehouse manager can confirm goods receipts for supplier parcels',
+      'Delivery agents cannot confirm goods receipts for supplier parcels',
       403,
       'FORBIDDEN',
     );
+  } else {
+    assertSellerOwnsOrder(req, receipt.purchaseOrder.createdBy);
   }
 
   const confirmed = await purchaseReceiptService.confirm(req.params.id);
