@@ -81,14 +81,43 @@ export const receiveSupplierOrder = async (req: Request, res: Response) => {
   return res.status(200).json({ success: true, data });
 };
 
+const sellerIdsFromRequest = (req: Request): string[] =>
+  [
+    ...new Set(
+      [requestUserId(req), typeof req.user?.sub === 'string' ? req.user.sub.trim() : ''].filter(
+        (id): id is string => Boolean(id),
+      ),
+    ),
+  ];
+
+const assertSellerOrDeliveryAgentCanProcess = async (req: Request, orderId: string) => {
+  if (isDeliveryAgent(req)) return;
+  if (!req.user || isWarehouseManager(req) || isPlatformAdmin(req)) {
+    throw new AppError(
+      'Only a delivery agent or the seller can confirm and pick up a supplier parcel',
+      403,
+      'FORBIDDEN',
+    );
+  }
+  const order = await purchaseOrderService.get(orderId);
+  const sellerIds = sellerIdsFromRequest(req);
+  if (!order.createdBy || !sellerIds.includes(order.createdBy)) {
+    throw new AppError(
+      'You can only confirm and pick up your own supplier parcels',
+      403,
+      'FORBIDDEN',
+    );
+  }
+};
+
 export const deliveryAgentPickupOrder = async (req: Request, res: Response) => {
-  assertDeliveryAgent(req, 'Only a delivery agent can pick up a supplier parcel');
+  await assertSellerOrDeliveryAgentCanProcess(req, req.params.id);
   const data = await purchaseOrderService.deliveryAgentPickup(req.params.id, req.user?.sub);
   return res.status(200).json({ success: true, data });
 };
 
 export const deliveryAgentProcessOrder = async (req: Request, res: Response) => {
-  assertDeliveryAgent(req, 'Only a delivery agent can mark a parcel processed');
+  await assertSellerOrDeliveryAgentCanProcess(req, req.params.id);
   const parsed = deliveryProcessConfirmSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ValidationError(parsed.error.errors.map((e) => e.message).join(', '));
