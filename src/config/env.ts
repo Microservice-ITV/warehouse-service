@@ -68,6 +68,16 @@ const schema = z.object({
   OUTBOX_PUBLISH_BATCH_SIZE: z.coerce.number().int().positive().default(100),
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().positive().default(20),
 
+  /** Re-emit inventory.updated for recent/orphaned stock so product + storefront mirrors heal in prod. 0 = disabled. */
+  INVENTORY_MIRROR_RECONCILE_INTERVAL_MS: z.coerce.number().int().min(0).default(120_000),
+  /** How far back to look for inventory_stocks.updated_at changes (slightly > interval to cover overlap). */
+  INVENTORY_MIRROR_RECONCILE_LOOKBACK_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(180_000),
+  INVENTORY_MIRROR_RECONCILE_BATCH_SIZE: z.coerce.number().int().positive().default(100),
+
 });
 
 const parsed = schema.safeParse(process.env);

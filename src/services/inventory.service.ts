@@ -1726,7 +1726,21 @@ export class InventoryService {
     }
   ): Promise<string | null> {
     const shopId = await this.resolveShopId(tx, params.productId);
-    if (!shopId) return null;
+    if (!shopId) {
+      // Inventory row is already updated; without shopId we cannot emit
+      // inventory.updated → product/frontend warehouse mirrors stay stale (0).
+      // Common when product.created never reached warehouse (consumer down).
+      logger.error(
+        {
+          product_id: params.productId,
+          warehouse_id: params.warehouseId,
+          correlation_id: params.correlationId,
+          local_available: params.localAvailable,
+        },
+        'inventory.updated skipped: missing product_snapshots.shopId — catalog/storefront will show 0 warehouse stock until snapshot exists and mirrors are republished',
+      );
+      return null;
+    }
 
     const totals = await this.inventoryRepository.computeTotalsByProductId(params.productId, tx);
     const variantRows = await this.inventoryRepository.listVariantTotalsByProductId(
