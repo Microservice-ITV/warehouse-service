@@ -4,6 +4,7 @@ import env from '@/config/env';
 import logger from '@/utils/logger';
 import { startRabbitMQ } from '@/rabbitmq';
 import { startOutboxPublisherJob } from '@/rabbitmq/jobs/outboxPublisher.job';
+import { startInventoryMirrorReconcileJob } from '@/rabbitmq/jobs/inventoryMirrorReconcile.job';
 import { closeRabbitConnection } from '@/rabbitmq/connection';
 
 const bootstrap = async () => {
@@ -16,6 +17,7 @@ const bootstrap = async () => {
 
   await startRabbitMQ();
   startOutboxPublisherJob();
+  startInventoryMirrorReconcileJob();
 };
 
 bootstrap().catch((error) => {

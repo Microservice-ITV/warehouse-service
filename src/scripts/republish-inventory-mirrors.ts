@@ -2,9 +2,12 @@
  * One-shot: re-emit inventory.updated for every product that has stock rows
  * so product-service / ecommerce-read can refresh warehouse mirrors.
  *
+ * Heals missing product_snapshots by fetching shopId from product-service.
+ *
  *   npx tsx src/scripts/republish-inventory-mirrors.ts
  */
 import prisma from '@/config/database';
+import { fetchCatalogProduct } from '@/clients/productCatalog.client';
 import { InventoryRepository } from '@/repositories/inventory.repository';
 import { ProductSnapshotRepository } from '@/repositories/productSnapshot.repository';
 import { EventsPublisher } from '@/publishers/events.publisher';
@@ -23,12 +26,37 @@ async function main() {
   ).map((row) => row.productId);
 
   let published = 0;
+  let healed = 0;
+  let skipped = 0;
+
   for (const productId of productIds) {
-    const snapshots = await productSnapshotRepository.findByProductIds([productId]);
-    const shopId = snapshots[0]?.shopId;
+    let snapshots = await productSnapshotRepository.findByProductIds([productId]);
+    let shopId = snapshots[0]?.shopId;
+
     if (!shopId) {
-      console.warn(`skip ${productId}: no product snapshot / shopId`);
-      continue;
+      const catalog = await fetchCatalogProduct(productId);
+      if (!catalog) {
+        console.warn(`skip ${productId}: no product snapshot / shopId (catalog fetch failed)`);
+        skipped += 1;
+        continue;
+      }
+      await productSnapshotRepository.upsert({
+        productId: catalog.productId,
+        shopId: catalog.shopId,
+        categoryId: catalog.categoryId,
+        slug: catalog.slug,
+        title: catalog.title,
+        description: catalog.description,
+        sku: catalog.sku,
+        price: catalog.price,
+        currency: catalog.currency,
+        images: catalog.images,
+        imageUrl: catalog.imageUrl,
+        isActive: catalog.isActive,
+      });
+      shopId = catalog.shopId;
+      healed += 1;
+      console.log(`healed snapshot ${productId} shopId=${shopId}`);
     }
 
     const totals = await inventoryRepository.computeTotalsByProductId(productId);
@@ -49,7 +77,12 @@ async function main() {
     );
   }
 
-  console.log(`done: queued ${published}/${productIds.length} products`);
+  console.log(
+    `done: queued ${published}/${productIds.length} products (healedSnapshots=${healed}, skipped=${skipped})`,
+  );
+  console.log(
+    'Note: outbox publisher must be running so events reach product-service / ecommerce-read.',
+  );
 }
 
 main()
