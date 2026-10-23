@@ -54,6 +54,7 @@ export class InventoryRepository {
         on_hand_qty: number;
         reserved_qty: number;
         available_qty: number;
+        unit_price_override: Prisma.Decimal | null;
         updated_at: Date;
       }>
     >`
@@ -78,6 +79,7 @@ export class InventoryRepository {
       onHandQty: Number(row.on_hand_qty),
       reservedQty: Number(row.reserved_qty),
       availableQty: Number(row.available_qty),
+      unitPriceOverride: row.unit_price_override ?? null,
       updatedAt: row.updated_at,
     };
   }

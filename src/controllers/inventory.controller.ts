@@ -38,6 +38,18 @@ export const getWarehouseInventory = async (req: Request, res: Response) => {
   return res.status(200).json({ success: true, data });
 };
 
+export const updateStockUnitPrice = async (req: Request, res: Response) => {
+  if (!req.user || isPlatformAdmin(req) || isWarehouseManager(req)) {
+    throw new AppError('Only the seller can change the unit price', 403, 'FORBIDDEN');
+  }
+  const data = await inventoryService.updateUnitPrice(
+    req.params.id,
+    req.body.unitPrice ?? null,
+    stockViewer(req),
+  );
+  return res.status(200).json({ success: true, data });
+};
+
 export const increaseStock = async (req: Request, res: Response) => {
   const data = await inventoryService.increaseStock({
     ...req.body,
