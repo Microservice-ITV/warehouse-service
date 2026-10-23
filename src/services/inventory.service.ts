@@ -15,6 +15,7 @@ import {
   resolveVariantIdFromLine,
   variantsMatch,
 } from '@/utils/variantKey';
+import { fetchProductShopNames } from '@/clients/productStock.client';
 import { buildInventoryVariantBreakdown } from '@/utils/inventoryVariantBreakdown';
 import { takeMatchingPoItem } from '@/utils/matchReceiptPoItem';
 import { assertWarehouseCanAcceptUnits } from '@/utils/warehouseCapacity';
@@ -174,15 +175,25 @@ export class InventoryService {
 
     const stocks = await this.inventoryRepository.listByWarehouse(warehouseId);
     const specs = await this.variantSpecsForWarehouse(warehouseId);
+    const unitPrices = await this.purchaseUnitPricesForWarehouse(warehouseId);
     const enrich = (stock: InventoryStock) => {
-      const base = withAvailability(stock);
+      const { unitPriceOverride, ...base } = withAvailability(stock);
       const parsed = parseVariantId(stock.variantId);
+      const poUnitPrice =
+        unitPrices.get(`${stock.productId}::${stock.variantId}`) ??
+        (parsed.colorId || parsed.sizeId
+          ? unitPrices.get(`${stock.productId}::${parsed.colorId}::${parsed.sizeId}`)
+          : undefined) ??
+        null;
+      const overridePrice = unitPriceOverride != null ? Number(unitPriceOverride) : null;
+      const unitPrice = overridePrice ?? poUnitPrice;
+      const pricing = { unitPrice, poUnitPrice, unitPriceOverride: overridePrice };
       const spec =
         specs.get(`${stock.productId}::${stock.variantId}`) ||
         (parsed.colorId || parsed.sizeId
           ? specs.get(`${stock.productId}::${parsed.colorId}::${parsed.sizeId}`)
           : undefined);
-      if (!spec) return base;
+      if (!spec) return { ...base, ...pricing };
       const colorName = base.colorName || spec.colorName;
       const sizeName = base.sizeName || spec.sizeName;
       const variantLabel =
@@ -201,6 +212,7 @@ export class InventoryService {
         weightPerUnit: spec.weightPerUnit,
         volumePerUnit: spec.volumePerUnit,
         unit: spec.unit,
+        ...pricing,
       };
     };
 
@@ -231,6 +243,45 @@ export class InventoryService {
     });
     if (visible.length === 0) throw new NotFoundError('Warehouse not found');
     return visible.map(enrich);
+  }
+
+  /**
+   * Seller sets (or clears with null) the unit price of one stock row.
+   * Same visibility rule as the seller inventory list: their own warehouse, or a
+   * product they purchased.
+   */
+  async updateUnitPrice(stockId: string, unitPrice: number | null, viewer: StockViewer) {
+    if (viewer.kind !== 'seller') {
+      throw new AppError('Only the seller can change the unit price', 403, 'FORBIDDEN');
+    }
+    const stock = await prisma.inventoryStock.findUnique({
+      where: { id: stockId },
+      include: { warehouse: { select: { createdBy: true, sellerUserId: true } } },
+    });
+    if (!stock) throw new NotFoundError('Inventory row not found');
+
+    const sellerIds = this.sellerIdentity(viewer);
+    const ownsWarehouse =
+      (stock.warehouse.createdBy && sellerIds.includes(stock.warehouse.createdBy)) ||
+      (stock.warehouse.sellerUserId && sellerIds.includes(stock.warehouse.sellerUserId));
+    if (!ownsWarehouse) {
+      const lines = await this.purchasedLines(sellerIds);
+      if (!lines.some((line) => line.productId === stock.productId)) {
+        throw new NotFoundError('Inventory row not found');
+      }
+    }
+
+    const updated = await prisma.inventoryStock.update({
+      where: { id: stockId },
+      data: {
+        unitPriceOverride: unitPrice == null ? null : Math.round(unitPrice * 100) / 100,
+      },
+    });
+    return {
+      id: updated.id,
+      unitPriceOverride:
+        updated.unitPriceOverride != null ? Number(updated.unitPriceOverride) : null,
+    };
   }
 
   /** Latest PO-line specs (dimensions / weight) keyed by productId::variantId for a warehouse. */
@@ -315,6 +366,67 @@ export class InventoryService {
       }
     }
     return map;
+  }
+
+  /**
+   * Landed unit price per inventory row, taken from the purchase order that
+   * supplied the stock: (subtotal + delivery + other costs) / ordered stock.
+   * Only supplier orders count: warehouse orders take existing stock out and
+   * carry no purchase cost, so they must not replace the supplier price.
+   * Keyed by productId::variantId (and productId::colorId::sizeId).
+   */
+  private async purchaseUnitPricesForWarehouse(warehouseId: string) {
+    const receipts = await prisma.purchaseReceipt.findMany({
+      where: { warehouseId, status: 'POSTED', purchaseOrder: { orderKind: 'SUPPLIER' } },
+      orderBy: { receivedAt: 'desc' },
+      include: {
+        items: { include: { purchaseOrderItem: true } },
+        purchaseOrder: { include: { items: true, additionalCosts: true } },
+      },
+    });
+
+    const priceByOrder = new Map<string, number | null>();
+    const byVariant = new Map<string, number>();
+
+    for (const receipt of receipts) {
+      const order = receipt.purchaseOrder;
+      if (!priceByOrder.has(order.id)) {
+        const subtotal = Number(order.subtotal) || 0;
+        const delivery = Number(order.shippingAmount) || 0;
+        const otherCosts = order.additionalCosts.reduce(
+          (sum, cost) => sum + (Number(cost.amount) || 0),
+          0,
+        );
+        const orderStock = order.items.reduce(
+          (sum, item) => sum + (Number(item.quantity) || 0),
+          0,
+        );
+        const total = subtotal + delivery + otherCosts;
+        priceByOrder.set(
+          order.id,
+          orderStock > 0 && total > 0 ? Math.round((total / orderStock) * 100) / 100 : null,
+        );
+      }
+
+      const unitPrice = priceByOrder.get(order.id);
+      if (unitPrice == null) continue;
+
+      for (const item of receipt.items) {
+        const variantId = resolveVariantIdFromLine(
+          item.purchaseOrderItem ?? null,
+          item.variantId,
+        );
+        const key = `${item.productId}::${variantId}`;
+        if (!byVariant.has(key)) byVariant.set(key, unitPrice);
+        const parsed = parseVariantId(variantId);
+        if (parsed.colorId || parsed.sizeId) {
+          const idKey = `${item.productId}::${parsed.colorId}::${parsed.sizeId}`;
+          if (!byVariant.has(idKey)) byVariant.set(idKey, unitPrice);
+        }
+      }
+    }
+
+    return byVariant;
   }
 
   /**
@@ -487,7 +599,99 @@ export class InventoryService {
         ],
       });
     }
-    return this.enrichTransferRouting(rows);
+    return this.enrichPurchaseRouting(await this.enrichTransferRouting(rows));
+  }
+
+  /**
+   * Attach supplier / seller shop labels for purchase movements:
+   * - PURCHASE_RECEIVED: supplier name → warehouse
+   * - PURCHASE_RETURNED: warehouse → supplier name
+   * - SALE_ISSUED from a warehouse order: warehouse → seller shop name
+   */
+  private async enrichPurchaseRouting<T extends {
+    warehouseId: string;
+    productId: string;
+    movementType: MovementType;
+    referenceId: string | null;
+    fromWarehouseName: string | null;
+    toWarehouseName: string | null;
+  }>(rows: T[]): Promise<T[]> {
+    const receiptIds = new Set<string>();
+    const returnIds = new Set<string>();
+    for (const row of rows) {
+      if (!row.referenceId) continue;
+      if (row.movementType === 'PURCHASE_RECEIVED' || row.movementType === 'SALE_ISSUED') {
+        receiptIds.add(row.referenceId);
+      } else if (row.movementType === 'PURCHASE_RETURNED') {
+        returnIds.add(row.referenceId);
+      }
+    }
+    if (receiptIds.size === 0 && returnIds.size === 0) return rows;
+
+    const [receipts, returns] = await Promise.all([
+      receiptIds.size > 0
+        ? prisma.purchaseReceipt.findMany({
+            where: { id: { in: [...receiptIds] } },
+            select: {
+              id: true,
+              purchaseOrder: {
+                select: { orderKind: true, supplier: { select: { name: true } } },
+              },
+            },
+          })
+        : [],
+      returnIds.size > 0
+        ? prisma.purchaseReturn.findMany({
+            where: { id: { in: [...returnIds] } },
+            select: { id: true, supplier: { select: { name: true } } },
+          })
+        : [],
+    ]);
+    const receiptById = new Map(receipts.map((receipt) => [receipt.id, receipt]));
+    const returnSupplierById = new Map(
+      returns.map((ret) => [ret.id, ret.supplier?.name ?? null]),
+    );
+
+    const warehouseOrderRows = rows.filter(
+      (row) =>
+        row.movementType === 'SALE_ISSUED' &&
+        row.referenceId &&
+        receiptById.get(row.referenceId)?.purchaseOrder.orderKind === 'WAREHOUSE',
+    );
+    const warehouseIds = [...new Set(rows.map((row) => row.warehouseId))];
+    const [shopNames, warehouses] = await Promise.all([
+      fetchProductShopNames(warehouseOrderRows.map((row) => row.productId)),
+      prisma.warehouse.findMany({
+        where: { id: { in: warehouseIds } },
+        select: { id: true, name: true },
+      }),
+    ]);
+    const warehouseNameById = new Map(warehouses.map((w) => [w.id, w.name]));
+
+    return rows.map((row) => {
+      if (!row.referenceId) return row;
+      const warehouseName = warehouseNameById.get(row.warehouseId) ?? null;
+      if (row.movementType === 'PURCHASE_RECEIVED') {
+        const supplierName = receiptById.get(row.referenceId)?.purchaseOrder.supplier?.name;
+        if (!supplierName) return row;
+        return { ...row, fromWarehouseName: supplierName, toWarehouseName: warehouseName };
+      }
+      if (row.movementType === 'PURCHASE_RETURNED') {
+        const supplierName = returnSupplierById.get(row.referenceId);
+        if (!supplierName) return row;
+        return { ...row, fromWarehouseName: warehouseName, toWarehouseName: supplierName };
+      }
+      if (row.movementType === 'SALE_ISSUED') {
+        const receipt = receiptById.get(row.referenceId);
+        if (receipt?.purchaseOrder.orderKind !== 'WAREHOUSE') return row;
+        return {
+          ...row,
+          fromWarehouseName: warehouseName,
+          toWarehouseName: shopNames.get(row.productId) ?? 'Seller stock',
+        };
+      }
+      return row;
+    });
   }
 
   /**

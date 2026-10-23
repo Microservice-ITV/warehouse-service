@@ -33,6 +33,39 @@ function toCreditPayload(item: ShopStockCredit) {
 }
 
 /**
+ * Owning shop name per product id from product-service.
+ * Returns an empty map on failure so callers can still render without labels.
+ */
+export async function fetchProductShopNames(productIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(productIds.filter((id) => UUID_RE.test(id)))];
+  if (ids.length === 0) return new Map();
+
+  const baseUrl = env.PRODUCT_SERVICE_URL.replace(/\/$/, '');
+  const url = `${baseUrl}/products/shop-names`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-service-key': env.SERVICE_API_KEY,
+      },
+      body: JSON.stringify({ productIds: ids }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      logger.warn({ url, status: response.status }, 'product-service shop-names failed');
+      return new Map();
+    }
+    const body = (await response.json()) as { data?: Record<string, string> };
+    return new Map(Object.entries(body.data ?? {}));
+  } catch (error) {
+    logger.warn({ err: error, url }, 'product-service shop-names request failed');
+    return new Map();
+  }
+}
+
+/**
  * Credits catalog shop stock in product-service after a warehouse→seller order receive.
  * Uses PRODUCT_SERVICE_URL + SERVICE_API_KEY from warehouse env.
  */
