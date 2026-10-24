@@ -277,6 +277,16 @@ export class InventoryService {
         unitPriceOverride: unitPrice == null ? null : Math.round(unitPrice * 100) / 100,
       },
     });
+
+    // Re-emit inventory.updated so product catalog unit price (basePrice) picks up
+    // the landed PO formula: (subtotal + delivery + other) / order stock.
+    await this.publishStockChange(prisma, {
+      productId: stock.productId,
+      warehouseId: stock.warehouseId,
+      correlationId: `unit-price-${stockId}-${Date.now()}`,
+      localAvailable: Number(updated.availableQty) || 0,
+    });
+
     return {
       id: updated.id,
       unitPriceOverride:

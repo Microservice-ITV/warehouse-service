@@ -11,7 +11,10 @@ export type InventoryVariantBreakdown = {
   sizeName: string;
   availableStock: number;
   totalStock: number;
-  /** Latest purchase unit price (PO "Unit price") for this color×size, when known. */
+  /**
+   * Landed unit price for this color×size (same as Inventory "Unit price (from PO)"):
+   * (PO subtotal + delivery + other costs) / order stock.
+   */
   unitCost: number | null;
   length: number | null;
   width: number | null;
@@ -48,6 +51,16 @@ export async function buildInventoryVariantBreakdown(
       width: true,
       height: true,
       weightPerUnit: true,
+      purchaseOrderId: true,
+      purchaseOrder: {
+        select: {
+          id: true,
+          subtotal: true,
+          shippingAmount: true,
+          items: { select: { quantity: true } },
+          additionalCosts: { select: { amount: true } },
+        },
+      },
     },
   });
 
@@ -60,6 +73,39 @@ export async function buildInventoryVariantBreakdown(
   };
   const poByIdKey = new Map<string, PoSpec>();
   const poByNameKey = new Map<string, PoSpec>();
+  const landedByOrderId = new Map<string, number | null>();
+
+  /** Same formula as Inventory "Unit price (from PO)". */
+  const landedUnitPrice = (
+    order: {
+      id: string;
+      subtotal: unknown;
+      shippingAmount: unknown;
+      items: Array<{ quantity: unknown }>;
+      additionalCosts: Array<{ amount: unknown }>;
+    } | null | undefined,
+    fallbackLineCost: number | null,
+  ): number | null => {
+    if (!order) return fallbackLineCost;
+    if (!landedByOrderId.has(order.id)) {
+      const subtotal = Number(order.subtotal) || 0;
+      const delivery = Number(order.shippingAmount) || 0;
+      const otherCosts = order.additionalCosts.reduce(
+        (sum, cost) => sum + (Number(cost.amount) || 0),
+        0,
+      );
+      const orderStock = order.items.reduce(
+        (sum, line) => sum + (Number(line.quantity) || 0),
+        0,
+      );
+      const total = subtotal + delivery + otherCosts;
+      landedByOrderId.set(
+        order.id,
+        orderStock > 0 && total > 0 ? Math.round((total / orderStock) * 100) / 100 : null,
+      );
+    }
+    return landedByOrderId.get(order.id) ?? fallbackLineCost;
+  };
 
   const putPo = (key: string | null, map: Map<string, PoSpec>, spec: PoSpec) => {
     if (!key || map.has(key)) return;
@@ -72,8 +118,9 @@ export async function buildInventoryVariantBreakdown(
     const sizeId = (item.sizeId || parsed.sizeId || '').trim();
     const colorName = (item.colorName || parsed.colorName || '').trim();
     const sizeName = (item.sizeName || parsed.sizeName || '').trim();
+    const lineCost = toNum(item.unitCost);
     const spec: PoSpec = {
-      unitCost: toNum(item.unitCost),
+      unitCost: landedUnitPrice(item.purchaseOrder, lineCost) ?? lineCost,
       length: toNum(item.length),
       width: toNum(item.width),
       height: toNum(item.height),
