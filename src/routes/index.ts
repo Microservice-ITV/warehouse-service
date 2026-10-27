@@ -3,6 +3,7 @@ import {
   createWarehouse,
   deleteWarehouse,
   getWarehouse,
+  getWarehouseManagers,
   listWarehouses,
   updateWarehouse,
 } from '@/controllers/warehouse.controller';
@@ -97,6 +98,7 @@ const asyncHandler =
     fn(req, res, next).catch(next);
 
 router.post('/warehouses', authOrService, validate(createWarehouseSchema), asyncHandler(createWarehouse));
+router.get('/warehouse-managers', authOrService, asyncHandler(getWarehouseManagers));
 router.get('/warehouses', authOrService, asyncHandler(listWarehouses));
 router.get('/warehouses/:id', authOrService, asyncHandler(getWarehouse));
 router.patch('/warehouses/:id', authOrService, validate(updateWarehouseSchema), asyncHandler(updateWarehouse));

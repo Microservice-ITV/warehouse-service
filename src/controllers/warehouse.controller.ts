@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { listWarehouseManagers } from '@/clients/employeeDirectory.client';
 import { InventoryService } from '@/services/inventory.service';
 import { WarehouseService } from '@/services/warehouse.service';
 import { AppError, ValidationError } from '@/utils/errors';
@@ -34,6 +35,11 @@ const requestUserId = (req: Request): string | undefined => {
 const isPlatformAdmin = (req: Request): boolean => PLATFORM_ADMIN_ROLES.has(requestRole(req));
 
 const isWarehouseManager = (req: Request): boolean => requestRole(req) === 'warehouse_manager';
+
+export const getWarehouseManagers = async (_req: Request, res: Response) => {
+  const users = await listWarehouseManagers();
+  return res.status(200).json({ success: true, data: { users } });
+};
 
 /** Service calls and platform admins see every warehouse. Sellers and warehouse managers see their own. */
 const seesAllWarehouses = (req: Request): boolean => !req.user || isPlatformAdmin(req);
