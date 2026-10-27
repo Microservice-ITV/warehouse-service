@@ -43,12 +43,20 @@ prisma/
 ## REST APIs
 
 - `POST /api/v1/warehouses`
+- `GET /api/v1/warehouse-managers`
 - `GET /api/v1/warehouses?shopId=:shopId`
 - `GET /api/v1/warehouses/:id`
 - `GET /api/v1/warehouses/:id/inventory`
 - `POST /api/v1/inventory/increase`
 - `POST /api/v1/inventory/adjust`
 - `GET /api/v1/inventory/movements`
+
+The warehouse-manager lookup is served from employee-service. Set
+`EMPLOYEE_SERVICE_URL` to the employee API base URL and configure
+`EMPLOYEE_SERVICE_KEY` to match employee-service's `INTERNAL_SERVICE_KEY`.
+Super Admin and HR should assign employees the Warehouse Manager position (or
+a Manager position/designation in the Warehouse department); currently employed
+linked employees with that assignment appear in sellers' warehouse forms.
 
 ## Consumed Events
 

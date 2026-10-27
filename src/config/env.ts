@@ -20,6 +20,8 @@ const schema = z.object({
         ? 'http://product-service:5001/api/v1'
         : 'http://product-service-dev:5001/api/v1',
     ),
+  EMPLOYEE_SERVICE_URL: z.string().url().default('http://employee-nginx/api/v1'),
+  EMPLOYEE_SERVICE_KEY: z.string().min(8),
 
   RABBITMQ_URL: z.string().min(1),
   RABBITMQ_EXCHANGE: z.string().default('order_events'),
