@@ -76,8 +76,9 @@ export const listMovementsQuerySchema = z.object({
 });
 
 /** null resets the stock row back to the purchase order unit price. */
-export const updateUnitPriceSchema = z.object({
-  unitPrice: z.coerce.number().positive().max(9_999_999_999.99).nullable(),
+export const updateExchangeRateSchema = z.object({
+  purchaseOrderId: z.string().uuid(),
+  exchangeRate: z.coerce.number().positive().max(99_999_999),
 });
 
 export const TRANSFER_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'] as const;

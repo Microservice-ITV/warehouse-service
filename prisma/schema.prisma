@@ -277,6 +277,8 @@ model PurchaseOrder {
   status         PurchaseOrderStatus @default(DRAFT)
   currency       String              @default("USD")
   exchangeRate   Decimal             @default(1) @db.Decimal(14, 6) @map("exchange_rate")
+  /// Actual rate once the goods arrive; landed MMK cost is rescaled from exchangeRate to this.
+  receivedExchangeRate Decimal?      @db.Decimal(14, 6) @map("received_exchange_rate")
   paymentTerms   String?             @map("payment_terms")
   deliveryTerms  String?             @map("delivery_terms")
   notes          String?

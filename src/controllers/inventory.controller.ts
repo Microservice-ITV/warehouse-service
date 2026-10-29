@@ -38,13 +38,14 @@ export const getWarehouseInventory = async (req: Request, res: Response) => {
   return res.status(200).json({ success: true, data });
 };
 
-export const updateStockUnitPrice = async (req: Request, res: Response) => {
+export const updateStockExchangeRate = async (req: Request, res: Response) => {
   if (!req.user || isPlatformAdmin(req) || isWarehouseManager(req)) {
-    throw new AppError('Only the seller can change the unit price', 403, 'FORBIDDEN');
+    throw new AppError('Only the seller can change the exchange rate', 403, 'FORBIDDEN');
   }
-  const data = await inventoryService.updateUnitPrice(
+  const data = await inventoryService.updateReceivedExchangeRate(
     req.params.id,
-    req.body.unitPrice ?? null,
+    req.body.purchaseOrderId,
+    req.body.exchangeRate,
     stockViewer(req),
   );
   return res.status(200).json({ success: true, data });

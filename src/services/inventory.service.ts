@@ -16,7 +16,7 @@ import {
   variantsMatch,
 } from '@/utils/variantKey';
 import { fetchProductShopNames } from '@/clients/productStock.client';
-import { buildInventoryVariantBreakdown } from '@/utils/inventoryVariantBreakdown';
+import { buildInventoryVariantBreakdown, landedUnitPrice } from '@/utils/inventoryVariantBreakdown';
 import { takeMatchingPoItem } from '@/utils/matchReceiptPoItem';
 import { assertWarehouseCanAcceptUnits } from '@/utils/warehouseCapacity';
 
@@ -175,19 +175,23 @@ export class InventoryService {
 
     const stocks = await this.inventoryRepository.listByWarehouse(warehouseId);
     const specs = await this.variantSpecsForWarehouse(warehouseId);
-    const unitPrices = await this.purchaseUnitPricesForWarehouse(warehouseId);
+    const { byVariant: unitPrices, history } = await this.purchaseUnitPricesForWarehouse(warehouseId);
     const enrich = (stock: InventoryStock) => {
       const { unitPriceOverride, ...base } = withAvailability(stock);
       const parsed = parseVariantId(stock.variantId);
+      const exactKey = `${stock.productId}::${stock.variantId}`;
+      const idKey =
+        parsed.colorId || parsed.sizeId
+          ? `${stock.productId}::${parsed.colorId}::${parsed.sizeId}`
+          : null;
       const poUnitPrice =
-        unitPrices.get(`${stock.productId}::${stock.variantId}`) ??
-        (parsed.colorId || parsed.sizeId
-          ? unitPrices.get(`${stock.productId}::${parsed.colorId}::${parsed.sizeId}`)
-          : undefined) ??
-        null;
+        unitPrices.get(exactKey) ?? (idKey ? unitPrices.get(idKey) : undefined) ?? null;
+      const poHistory = [
+        ...(history.get(exactKey) ?? (idKey ? history.get(idKey) : undefined) ?? new Map()).values(),
+      ];
       const overridePrice = unitPriceOverride != null ? Number(unitPriceOverride) : null;
       const unitPrice = overridePrice ?? poUnitPrice;
-      const pricing = { unitPrice, poUnitPrice, unitPriceOverride: overridePrice };
+      const pricing = { unitPrice, poUnitPrice, unitPriceOverride: overridePrice, poHistory };
       const spec =
         specs.get(`${stock.productId}::${stock.variantId}`) ||
         (parsed.colorId || parsed.sizeId
@@ -246,13 +250,19 @@ export class InventoryService {
   }
 
   /**
-   * Seller sets (or clears with null) the unit price of one stock row.
+   * Seller sets the actual exchange rate of a PO received into this stock row's
+   * warehouse; the landed unit price is recalculated from it.
    * Same visibility rule as the seller inventory list: their own warehouse, or a
    * product they purchased.
    */
-  async updateUnitPrice(stockId: string, unitPrice: number | null, viewer: StockViewer) {
+  async updateReceivedExchangeRate(
+    stockId: string,
+    purchaseOrderId: string,
+    exchangeRate: number,
+    viewer: StockViewer,
+  ) {
     if (viewer.kind !== 'seller') {
-      throw new AppError('Only the seller can change the unit price', 403, 'FORBIDDEN');
+      throw new AppError('Only the seller can change the exchange rate', 403, 'FORBIDDEN');
     }
     const stock = await prisma.inventoryStock.findUnique({
       where: { id: stockId },
@@ -271,27 +281,35 @@ export class InventoryService {
       }
     }
 
-    const updated = await prisma.inventoryStock.update({
-      where: { id: stockId },
-      data: {
-        unitPriceOverride: unitPrice == null ? null : Math.round(unitPrice * 100) / 100,
+    const receipt = await prisma.purchaseReceipt.findFirst({
+      where: {
+        purchaseOrderId,
+        warehouseId: stock.warehouseId,
+        status: 'POSTED',
+        items: { some: { productId: stock.productId } },
       },
+      select: { id: true },
     });
+    if (!receipt) throw new NotFoundError('Purchase order not found for this stock');
 
-    // Re-emit inventory.updated so product catalog unit price (basePrice) picks up
-    // the landed PO formula: (subtotal + delivery + other) / order stock.
+    // Clear any old manual unit price so the recalculated PO price applies.
+    const [, updated] = await prisma.$transaction([
+      prisma.purchaseOrder.update({
+        where: { id: purchaseOrderId },
+        data: { receivedExchangeRate: exchangeRate },
+      }),
+      prisma.inventoryStock.update({ where: { id: stockId }, data: { unitPriceOverride: null } }),
+    ]);
+
+    // Re-emit inventory.updated so product catalog unit price (basePrice) picks up the new rate.
     await this.publishStockChange(prisma, {
       productId: stock.productId,
       warehouseId: stock.warehouseId,
-      correlationId: `unit-price-${stockId}-${Date.now()}`,
+      correlationId: `exchange-rate-${purchaseOrderId}-${Date.now()}`,
       localAvailable: Number(updated.availableQty) || 0,
     });
 
-    return {
-      id: updated.id,
-      unitPriceOverride:
-        updated.unitPriceOverride != null ? Number(updated.unitPriceOverride) : null,
-    };
+    return { purchaseOrderId, exchangeRate };
   }
 
   /** Latest PO-line specs (dimensions / weight) keyed by productId::variantId for a warehouse. */
@@ -397,26 +415,22 @@ export class InventoryService {
 
     const priceByOrder = new Map<string, number | null>();
     const byVariant = new Map<string, number>();
+    type PoHistoryRow = {
+      purchaseOrderId: string;
+      orderNumber: string;
+      receivedAt: string | null;
+      quantity: number;
+      unitPrice: number;
+      currency: string;
+      poExchangeRate: number;
+      exchangeRate: number;
+    };
+    // variant key → (PO id → row), newest PO first.
+    const history = new Map<string, Map<string, PoHistoryRow>>();
 
     for (const receipt of receipts) {
       const order = receipt.purchaseOrder;
-      if (!priceByOrder.has(order.id)) {
-        const subtotal = Number(order.subtotal) || 0;
-        const delivery = Number(order.shippingAmount) || 0;
-        const otherCosts = order.additionalCosts.reduce(
-          (sum, cost) => sum + (Number(cost.amount) || 0),
-          0,
-        );
-        const orderStock = order.items.reduce(
-          (sum, item) => sum + (Number(item.quantity) || 0),
-          0,
-        );
-        const total = subtotal + delivery + otherCosts;
-        priceByOrder.set(
-          order.id,
-          orderStock > 0 && total > 0 ? Math.round((total / orderStock) * 100) / 100 : null,
-        );
-      }
+      if (!priceByOrder.has(order.id)) priceByOrder.set(order.id, landedUnitPrice(order));
 
       const unitPrice = priceByOrder.get(order.id);
       if (unitPrice == null) continue;
@@ -426,17 +440,37 @@ export class InventoryService {
           item.purchaseOrderItem ?? null,
           item.variantId,
         );
-        const key = `${item.productId}::${variantId}`;
-        if (!byVariant.has(key)) byVariant.set(key, unitPrice);
         const parsed = parseVariantId(variantId);
+        const keys = [`${item.productId}::${variantId}`];
         if (parsed.colorId || parsed.sizeId) {
-          const idKey = `${item.productId}::${parsed.colorId}::${parsed.sizeId}`;
-          if (!byVariant.has(idKey)) byVariant.set(idKey, unitPrice);
+          keys.push(`${item.productId}::${parsed.colorId}::${parsed.sizeId}`);
+        }
+        const qty = Number(item.acceptedQty ?? item.quantity) || 0;
+        for (const key of keys) {
+          if (!byVariant.has(key)) byVariant.set(key, unitPrice);
+          const rows = history.get(key) ?? new Map<string, PoHistoryRow>();
+          history.set(key, rows);
+          const row = rows.get(order.id);
+          if (row) {
+            row.quantity += qty;
+          } else {
+            const poExchangeRate = Number(order.exchangeRate) || 1;
+            rows.set(order.id, {
+              purchaseOrderId: order.id,
+              orderNumber: order.orderNumber,
+              receivedAt: receipt.receivedAt?.toISOString() ?? null,
+              quantity: qty,
+              unitPrice,
+              currency: order.currency,
+              poExchangeRate,
+              exchangeRate: Number(order.receivedExchangeRate) || poExchangeRate,
+            });
+          }
         }
       }
     }
 
-    return byVariant;
+    return { byVariant, history };
   }
 
   /**

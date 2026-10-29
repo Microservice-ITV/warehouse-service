@@ -18,7 +18,7 @@ import {
   rejectTransfer,
   requestTransfer,
   listSellerStock,
-  updateStockUnitPrice,
+  updateStockExchangeRate,
   validateProductStock,
 } from '@/controllers/inventory.controller';
 import {
@@ -71,7 +71,7 @@ import {
   receiveStockSchema,
   transferDecisionSchema,
   transferStockSchema,
-  updateUnitPriceSchema,
+  updateExchangeRateSchema,
   validateProductStockSchema,
 } from '@/validators/inventory.validators';
 import {
@@ -158,7 +158,7 @@ router.post('/purchase-returns/:id/post', authOrService, asyncHandler(postPurcha
 
 router.post('/inventory/increase', authOrService, validate(increaseStockSchema), asyncHandler(increaseStock));
 router.get('/inventory/seller', authOrService, asyncHandler(listSellerStock));
-router.patch('/inventory/stocks/:id/unit-price', authOrService, validate(updateUnitPriceSchema), asyncHandler(updateStockUnitPrice));
+router.patch('/inventory/stocks/:id/exchange-rate', authOrService, validate(updateExchangeRateSchema), asyncHandler(updateStockExchangeRate));
 router.post('/inventory/transfer', authOrService, validate(transferStockSchema), asyncHandler(requestTransfer));
 router.get('/inventory/transfers', authOrService, asyncHandler(listTransfers));
 router.post('/inventory/transfers/:id/approve', authOrService, validate(transferDecisionSchema), asyncHandler(approveTransfer));
