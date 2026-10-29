@@ -28,6 +28,32 @@ const toNum = (value: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+export type LandedOrder = {
+  subtotal: unknown;
+  shippingAmount: unknown;
+  exchangeRate: unknown;
+  receivedExchangeRate: unknown;
+  items: Array<{ quantity: unknown }>;
+  additionalCosts: Array<{ amount: unknown }>;
+};
+
+/**
+ * (Subtotal + Delivery + Other costs) / Order stock, rescaled from the PO
+ * exchange rate to the received rate (the foreign cost stays fixed).
+ */
+export const landedUnitPrice = (order: LandedOrder): number | null => {
+  const total =
+    (Number(order.subtotal) || 0) +
+    (Number(order.shippingAmount) || 0) +
+    order.additionalCosts.reduce((sum, cost) => sum + (Number(cost.amount) || 0), 0);
+  const orderStock = order.items.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
+  if (orderStock <= 0 || total <= 0) return null;
+  const poRate = Number(order.exchangeRate) || 1;
+  const receivedRate = Number(order.receivedExchangeRate) || poRate;
+  const scale = poRate > 1 ? receivedRate / poRate : 1;
+  return Math.round((total / orderStock) * scale * 100) / 100;
+};
+
 /**
  * Aggregate on-hand inventory by color×size and attach the latest PO line
  * unit price / dimensions for that color×size (so catalog can mirror them).
@@ -57,6 +83,8 @@ export async function buildInventoryVariantBreakdown(
           id: true,
           subtotal: true,
           shippingAmount: true,
+          exchangeRate: true,
+          receivedExchangeRate: true,
           items: { select: { quantity: true } },
           additionalCosts: { select: { amount: true } },
         },
@@ -75,35 +103,12 @@ export async function buildInventoryVariantBreakdown(
   const poByNameKey = new Map<string, PoSpec>();
   const landedByOrderId = new Map<string, number | null>();
 
-  /** Same formula as Inventory "Unit price (from PO)". */
-  const landedUnitPrice = (
-    order: {
-      id: string;
-      subtotal: unknown;
-      shippingAmount: unknown;
-      items: Array<{ quantity: unknown }>;
-      additionalCosts: Array<{ amount: unknown }>;
-    } | null | undefined,
+  const orderUnitPrice = (
+    order: (LandedOrder & { id: string }) | null | undefined,
     fallbackLineCost: number | null,
   ): number | null => {
     if (!order) return fallbackLineCost;
-    if (!landedByOrderId.has(order.id)) {
-      const subtotal = Number(order.subtotal) || 0;
-      const delivery = Number(order.shippingAmount) || 0;
-      const otherCosts = order.additionalCosts.reduce(
-        (sum, cost) => sum + (Number(cost.amount) || 0),
-        0,
-      );
-      const orderStock = order.items.reduce(
-        (sum, line) => sum + (Number(line.quantity) || 0),
-        0,
-      );
-      const total = subtotal + delivery + otherCosts;
-      landedByOrderId.set(
-        order.id,
-        orderStock > 0 && total > 0 ? Math.round((total / orderStock) * 100) / 100 : null,
-      );
-    }
+    if (!landedByOrderId.has(order.id)) landedByOrderId.set(order.id, landedUnitPrice(order));
     return landedByOrderId.get(order.id) ?? fallbackLineCost;
   };
 
@@ -120,7 +125,7 @@ export async function buildInventoryVariantBreakdown(
     const sizeName = (item.sizeName || parsed.sizeName || '').trim();
     const lineCost = toNum(item.unitCost);
     const spec: PoSpec = {
-      unitCost: landedUnitPrice(item.purchaseOrder, lineCost) ?? lineCost,
+      unitCost: orderUnitPrice(item.purchaseOrder, lineCost) ?? lineCost,
       length: toNum(item.length),
       width: toNum(item.width),
       height: toNum(item.height),
