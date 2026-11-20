@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { createEventEnvelope } from '@/events/envelope';
-import type { PurchaseGoodsReceivedData, PurchaseGoodsReturnedData } from '@/events/types';
+import type { PurchaseGoodsReceivedData, PurchaseGoodsReturnedData, SaleIssuedData } from '@/events/types';
 import { OutboxRepository } from '@/repositories/outbox.repository';
 import { PurchaseOutboxRepository } from '@/repositories/purchaseOutbox.repository';
 import { rabbitConfig } from '@/config/rabbitmq';
@@ -53,6 +53,34 @@ export class EventsPublisher {
       eventId: envelope.event_id,
       event: envelope.event,
       routingKey: rabbitConfig.publish.inventoryUpdated,
+      payload: envelope,
+      db: input.db ?? prisma,
+    });
+    return envelope;
+  }
+
+  async publishSaleIssued(input: {
+    referenceId: string;
+    orderId?: string;
+    checkoutId?: string;
+    allocations: SaleIssuedData['allocations'];
+    correlationId: string;
+    db?: Db;
+  }) {
+    const envelope = createEventEnvelope({
+      event: 'inventory.sale.issued',
+      correlationId: input.correlationId,
+      data: {
+        reference_id: input.referenceId,
+        ...(input.orderId ? { order_id: input.orderId } : {}),
+        ...(input.checkoutId ? { checkout_id: input.checkoutId } : {}),
+        allocations: input.allocations,
+      },
+    });
+    await outboxRepository.enqueue({
+      eventId: envelope.event_id,
+      event: envelope.event,
+      routingKey: rabbitConfig.publish.saleIssued,
       payload: envelope,
       db: input.db ?? prisma,
     });

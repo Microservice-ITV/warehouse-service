@@ -1105,6 +1105,8 @@ export class InventoryService {
     colorId?: string | null;
     sizeId?: string | null;
     referenceId: string;
+    orderId?: string;
+    checkoutId?: string;
   }): Promise<void> {
     if (input.quantity <= 0) return;
 
@@ -1124,6 +1126,7 @@ export class InventoryService {
 
       let remaining = input.quantity;
       const touchedWarehouseIds = new Set<string>();
+      const allocations = new Map<string, number>();
       let lastAvailable = 0;
 
       for (const row of pool) {
@@ -1153,6 +1156,7 @@ export class InventoryService {
           db: tx,
         });
         touchedWarehouseIds.add(row.warehouseId);
+        allocations.set(row.warehouseId, (allocations.get(row.warehouseId) ?? 0) + take);
         lastAvailable = moved.stock.availableQty;
         remaining -= take;
       }
@@ -1174,6 +1178,21 @@ export class InventoryService {
           warehouseId,
           correlationId: input.referenceId,
           localAvailable: lastAvailable,
+        });
+      }
+
+      if (allocations.size > 0) {
+        await this.eventsPublisher.publishSaleIssued({
+          referenceId: input.referenceId,
+          orderId: input.orderId,
+          checkoutId: input.checkoutId,
+          allocations: [...allocations].map(([warehouseId, quantity]) => ({
+            product_id: input.productId,
+            warehouse_id: warehouseId,
+            quantity,
+          })),
+          correlationId: input.referenceId,
+          db: tx,
         });
       }
     });

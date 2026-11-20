@@ -66,6 +66,8 @@ export const startStockConfirmedConsumer = async () => {
             colorId: item.color_id,
             sizeId: item.size_id,
             referenceId,
+            orderId: payload.data.order_id,
+            checkoutId: payload.data.checkout_id,
           });
         }
 
