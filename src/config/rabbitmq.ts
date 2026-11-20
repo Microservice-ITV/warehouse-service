@@ -60,6 +60,7 @@ export const rabbitConfig = {
   publish: {
     inventoryUpdated: env.RABBITMQ_INVENTORY_UPDATED_KEY,
     inventoryLowStock: env.RABBITMQ_INVENTORY_LOW_STOCK_KEY,
+    saleIssued: 'inventory.sale.issued',
     purchaseGoodsReceived: env.RABBITMQ_PURCHASE_GOODS_RECEIVED_KEY,
     purchaseGoodsReturned: 'purchase.goods_returned',
   },

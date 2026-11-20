@@ -134,6 +134,19 @@ export interface StockConfirmedSaleItem {
   quantity: number;
 }
 
+export interface SaleIssuedAllocation {
+  product_id: string;
+  warehouse_id: string;
+  quantity: number;
+}
+
+export interface SaleIssuedData {
+  reference_id: string;
+  order_id?: string;
+  checkout_id?: string;
+  allocations: SaleIssuedAllocation[];
+}
+
 export interface StockConfirmedEvent {
   event_id: string;
   event: 'product.stock.confirmed';
